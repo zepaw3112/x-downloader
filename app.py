@@ -11,13 +11,10 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>X Video Downloader</title>
-    
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#000000">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <meta name="apple-mobile-web-app-title" content="𝕏 Downloader">
     <link rel="apple-touch-icon" href="https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/X_logo_2023.svg/512px-X_logo_2023.svg.png">
 
     <style>
@@ -31,12 +28,8 @@ HTML_TEMPLATE = """
         button { background-color: #1d9bf0; color: white; font-weight: bold; border: none; cursor: pointer; transition: 0.2s; }
         button:disabled { opacity: 0.5; }
         .result-box { margin-top: 15px; display: none; }
-        
-        /* แก้ไขตรงนี้: เปลี่ยนจาก cover เป็น contain เพื่อให้เห็นรูปเต็ม */
         .preview-img { width: 100%; max-height: 300px; object-fit: contain; background: #000; border-radius: 12px; margin: 10px 0; border: 1px solid #2f3336; display: none; }
-        
         .dl-btn { display: block; width: 100%; background: #00ba7c; color: #fff; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 10px; text-align: center; border: none; cursor: pointer; }
-        label { font-size: 13px; color: #71767b; margin-top: 10px; display: block; }
     </style>
 </head>
 <body>
@@ -44,188 +37,99 @@ HTML_TEMPLATE = """
         <h2>𝕏 Video Downloader</h2>
         <input type="text" id="url" placeholder="วางลิงก์ X (Twitter) ที่นี่...">
         <button onclick="fetchVideo()" id="fetchBtn">ค้นหาความละเอียดคลิป</button>
-
         <div class="result-box" id="resultBox">
             <img id="previewImg" class="preview-img" alt="Video Preview">
-            <label for="qualitySelect">เลือกความละเอียด และขนาดไฟล์:</label>
+            <label>เลือกวิดีโอที่ต้องการ:</label>
             <select id="qualitySelect"></select>
-
             <button onclick="startDownload()" class="dl-btn">⬇️ ดาวน์โหลดวิดีโอ</button>
-            <p style="font-size: 12px; color: #71767b; text-align: center; margin-top: 8px;">(ระบบสตรีมตรงผ่าน Chrome)</p>
         </div>
     </div>
-
     <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js');
-        }
-
         async function fetchVideo() {
             const url = document.getElementById('url').value.trim();
-            if(!url) return alert('กรุณาวางลิงก์ก่อนครับ');
-
+            if(!url) return alert('กรุณาวางลิงก์');
             const btn = document.getElementById('fetchBtn');
-            btn.innerText = 'กำลังสแกนคลิปและภาพพรีวิว...';
-            btn.disabled = true;
+            btn.innerText = 'กำลังสแกน...'; btn.disabled = true;
             document.getElementById('resultBox').style.display = 'none';
 
             try {
-                const res = await fetch('/get-video', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ url })
-                });
+                const res = await fetch('/get-video', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ url }) });
                 const data = await res.json();
-
-                btn.innerText = 'ค้นหาความละเอียดคลิป';
-                btn.disabled = false;
-
+                btn.innerText = 'ค้นหาความละเอียดคลิป'; btn.disabled = false;
                 if(data.error) return alert(data.error);
 
                 const img = document.getElementById('previewImg');
-                if (data.thumbnail) {
-                    img.src = data.thumbnail;
-                    img.style.display = 'block';
-                } else {
-                    img.style.display = 'none';
-                }
-
+                if (data.thumbnail) { img.src = data.thumbnail; img.style.display = 'block'; }
+                
                 const select = document.getElementById('qualitySelect');
                 select.innerHTML = '';
-                
                 data.videos.forEach(v => {
                     const opt = document.createElement('option');
                     opt.value = v.url;
-                    opt.innerText = `${v.resolution}  |  ขนาดไฟล์: ${v.filesize}`;
+                    opt.innerText = `คลิปที่ ${v.video_index} | ${v.resolution} | ${v.filesize}`;
                     select.appendChild(opt);
                 });
-
                 document.getElementById('resultBox').style.display = 'block';
-            } catch (e) {
-                btn.innerText = 'ค้นหาความละเอียดคลิป';
-                btn.disabled = false;
-                alert('เกิดข้อผิดพลาดในการเชื่อมต่อ');
-            }
+            } catch (e) { btn.innerText = 'ค้นหา'; btn.disabled = false; alert('error'); }
         }
-
-        function startDownload() {
-            const select = document.getElementById('qualitySelect');
-            const videoUrl = select.value;
-            if(!videoUrl) return;
-
-            window.location.href = `/download-file?url=${encodeURIComponent(videoUrl)}`;
-        }
+        function startDownload() { window.location.href = `/download-file?url=${encodeURIComponent(document.getElementById('qualitySelect').value)}`; }
     </script>
 </body>
 </html>
 """
 
 @app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/manifest.json')
-def manifest():
-    return jsonify({
-        "name": "X Video Downloader",
-        "short_name": "𝕏 Downloader",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#000000",
-        "theme_color": "#000000",
-        "icons": [
-            {
-                "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/X_logo_2023.svg/512px-X_logo_2023.svg.png",
-                "sizes": "512x512",
-                "type": "image/png",
-                "purpose": "any maskable"
-            }
-        ]
-    })
-
-@app.route('/sw.js')
-def sw():
-    sw_code = "self.addEventListener('fetch', function(event) { return; });"
-    return Response(sw_code, mimetype='application/javascript')
+def index(): return render_template_string(HTML_TEMPLATE)
 
 @app.route('/get-video', methods=['POST'])
 def get_video():
     raw_url = request.json.get('url', '').strip().strip("'").strip('"')
     match = re.search(r'status/(\d+)', raw_url)
-    if not match:
-        return jsonify({'error': 'ลิงก์ไม่ถูกต้อง'}), 400
+    if not match: return jsonify({'error': 'ลิงก์ไม่ถูกต้อง'}), 400
     
     tweet_id = match.group(1)
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://x.com/'}
-    raw_variants = []
-    thumbnail_url = ""
-
+    
+    # ดึงข้อมูลผ่าน FxTwitter
     try:
-        r1 = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=5)
-        if r1.status_code == 200:
-            d1 = r1.json()
-            videos = d1.get('tweet', {}).get('media', {}).get('videos', [])
-            if videos:
-                thumbnail_url = videos[0].get('thumbnail_url', '')
-                if 'variants' in videos[0]: raw_variants = videos[0]['variants']
-    except Exception: pass
-
-    if not raw_variants:
-        try:
-            r2 = requests.get(f"https://api.vxtwitter.com/i/status/{tweet_id}", headers=headers, timeout=5)
-            if r2.status_code == 200:
-                d2 = r2.json()
-                media = d2.get('media_extended', [])
-                for item in media:
-                    if item.get('type') == 'video':
-                        thumbnail_url = item.get('thumbnail_url', '')
-                        if 'variants' in item: raw_variants = item['variants']; break
-        except Exception: pass
-
-    if not raw_variants:
-        return jsonify({'error': 'ไม่พบวิดีโอในโพสต์นี้'}), 400
+        r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            media_items = data.get('tweet', {}).get('media', {}).get('videos', [])
+            if not media_items: media_items = data.get('tweet', {}).get('media', {}).get('photos', [])
+    except: return jsonify({'error': 'เชื่อมต่อ API ไม่ได้'}), 500
 
     results = []
-    seen_urls = set()
+    thumbnail_url = ""
+    
+    # วนลูปทุก Media ในโพสต์
+    for idx, item in enumerate(media_items, 1):
+        if not thumbnail_url: thumbnail_url = item.get('thumbnail_url', '')
+        variants = item.get('variants', [])
+        for v in variants:
+            v_url = v.get('url', '')
+            if not v_url or not v_url.split('?')[0].endswith('.mp4'): continue
+            
+            # เช็คความละเอียดและขนาด
+            res_match = re.search(r'/(\d+)x(\d+)/', v_url)
+            res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
+            
+            size_str = "Unknown"
+            try:
+                cl = requests.head(v_url, headers=headers, timeout=2).headers.get('content-length')
+                if cl: size_str = f"{round(int(cl)/1048576, 1)} MB"
+            except: pass
 
-    for v in raw_variants:
-        v_url = v.get('url', '')
-        if not v_url or v_url in seen_urls or not v_url.split('?')[0].endswith('.mp4'): continue
-        seen_urls.add(v_url)
+            results.append({'video_index': idx, 'url': v_url, 'resolution': res_label, 'filesize': size_str, 'bitrate': v.get('bitrate', 0)})
 
-        res_match = re.search(r'/(\d+)x(\d+)/', v_url)
-        if res_match:
-            w, h = int(res_match.group(1)), int(res_match.group(2))
-            min_dim = min(w, h)
-            res_label = f"{min_dim}p"
-        else:
-            bitrate = v.get('bitrate', 0)
-            if bitrate > 2000000: res_label = "1080p (FHD)"
-            elif bitrate > 800000: res_label = "720p (HD)"
-            elif bitrate > 300000: res_label = "480p (SD)"
-            else: res_label = "360p (Low)"
-
-        size_str = "ไม่ทราบขนาด"
-        try:
-            head_res = requests.head(v_url, headers=headers, timeout=3)
-            cl = head_res.headers.get('content-length')
-            if cl and cl.isdigit():
-                mb = round(int(cl) / (1024 * 1024), 1)
-                size_str = f"{mb} MB"
-        except Exception: pass
-
-        results.append({'url': v_url, 'resolution': res_label, 'filesize': size_str, 'bitrate': v.get('bitrate', 0)})
-
-    results.sort(key=lambda x: x['bitrate'], reverse=True)
-    return jsonify({'thumbnail': thumbnail_url, 'videos': results})
+    if not results: return jsonify({'error': 'ไม่พบวิดีโอ'}), 400
+    return jsonify({'thumbnail': thumbnail_url, 'videos': sorted(results, key=lambda x: x['bitrate'], reverse=True)})
 
 @app.route('/download-file')
 def download_file():
     video_url = request.args.get('url')
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://x.com/'}
-    req = requests.get(video_url, headers=headers, stream=True)
-    return Response(stream_with_context(req.iter_content(chunk_size=1024 * 64)), content_type=req.headers.get('content-type', 'video/mp4'), headers={'Content-Disposition': 'attachment; filename="x_video.mp4"'})
+    req = requests.get(video_url, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://x.com/'}, stream=True)
+    return Response(stream_with_context(req.iter_content(65536)), headers={'Content-Disposition': 'attachment; filename="x_video.mp4"'})
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
 
