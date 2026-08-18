@@ -11,10 +11,20 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>X Video Downloader</title>
+    
+    <!-- PWA Settings (ตั้งค่า Web App) -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#000000">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="𝕏 Downloader">
+    <link rel="apple-touch-icon" href="https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/X_logo_2023.svg/512px-X_logo_2023.svg.png">
+
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-        body { background-color: #000; color: #fff; padding: 20px; margin: 0; }
-        .card { background: #16181c; border-radius: 16px; padding: 20px; max-width: 450px; margin: 0 auto; border: 1px solid #2f3336; }
+        body { background-color: #000; color: #fff; padding: 20px; margin: 0; user-select: none; }
+        .card { background: #16181c; border-radius: 16px; padding: 20px; max-width: 450px; margin: 20px auto; border: 1px solid #2f3336; }
         h2 { text-align: center; margin-top: 0; color: #1d9bf0; }
         input, select, button { width: 100%; padding: 14px; margin: 8px 0; border-radius: 8px; border: 1px solid #333; font-size: 15px; }
         input { background: #000; color: #fff; }
@@ -22,6 +32,10 @@ HTML_TEMPLATE = """
         button { background-color: #1d9bf0; color: white; font-weight: bold; border: none; cursor: pointer; transition: 0.2s; }
         button:disabled { opacity: 0.5; }
         .result-box { margin-top: 15px; display: none; }
+        
+        /* สไตล์สำหรับรูป พรีวิว */
+        .preview-img { width: 100%; max-height: 250px; object-fit: cover; border-radius: 12px; margin: 10px 0; border: 1px solid #2f3336; display: none; }
+        
         .dl-btn { display: block; width: 100%; background: #00ba7c; color: #fff; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 10px; text-align: center; border: none; cursor: pointer; }
         label { font-size: 13px; color: #71767b; margin-top: 10px; display: block; }
     </style>
@@ -33,21 +47,28 @@ HTML_TEMPLATE = """
         <button onclick="fetchVideo()" id="fetchBtn">ค้นหาความละเอียดคลิป</button>
 
         <div class="result-box" id="resultBox">
+            <!-- แสดงภาพพรีวิวคลิป -->
+            <img id="previewImg" class="preview-img" alt="Video Preview">
+
             <label for="qualitySelect">เลือกความละเอียด และขนาดไฟล์:</label>
             <select id="qualitySelect"></select>
 
             <button onclick="startDownload()" class="dl-btn">⬇️ ดาวน์โหลดวิดีโอ</button>
-            <p style="font-size: 12px; color: #71767b; text-align: center; margin-top: 8px;">(Chrome จะแสดงความเร็วและเวลาที่เหลือให้อัตโนมัติ)</p>
+            <p style="font-size: 12px; color: #71767b; text-align: center; margin-top: 8px;">(ระบบสตรีมตรงผ่าน Chrome)</p>
         </div>
     </div>
 
     <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
+
         async function fetchVideo() {
             const url = document.getElementById('url').value.trim();
             if(!url) return alert('กรุณาวางลิงก์ก่อนครับ');
 
             const btn = document.getElementById('fetchBtn');
-            btn.innerText = 'กำลังคำนวณและสแกนไฟล์...';
+            btn.innerText = 'กำลังสแกนคลิปและภาพพรีวิว...';
             btn.disabled = true;
             document.getElementById('resultBox').style.display = 'none';
 
@@ -63,6 +84,15 @@ HTML_TEMPLATE = """
                 btn.disabled = false;
 
                 if(data.error) return alert(data.error);
+
+                // แสดงรูปพรีวิว (ถ้ามี)
+                const img = document.getElementById('previewImg');
+                if (data.thumbnail) {
+                    img.src = data.thumbnail;
+                    img.style.display = 'block';
+                } else {
+                    img.style.display = 'none';
+                }
 
                 const select = document.getElementById('qualitySelect');
                 select.innerHTML = '';
@@ -98,6 +128,30 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/manifest.json')
+def manifest():
+    return jsonify({
+        "name": "X Video Downloader",
+        "short_name": "𝕏 Downloader",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#000000",
+        "theme_color": "#000000",
+        "icons": [
+            {
+                "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/X_logo_2023.svg/512px-X_logo_2023.svg.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any maskable"
+            }
+        ]
+    })
+
+@app.route('/sw.js')
+def sw():
+    sw_code = "self.addEventListener('fetch', function(event) { return; });"
+    return Response(sw_code, mimetype='application/javascript')
+
 @app.route('/get-video', methods=['POST'])
 def get_video():
     raw_url = request.json.get('url', '').strip().strip("'").strip('"')
@@ -114,6 +168,7 @@ def get_video():
     }
 
     raw_variants = []
+    thumbnail_url = ""
 
     # 1. FxTwitter API
     try:
@@ -121,12 +176,14 @@ def get_video():
         if r1.status_code == 200:
             d1 = r1.json()
             videos = d1.get('tweet', {}).get('media', {}).get('videos', [])
-            if videos and 'variants' in videos[0]:
-                raw_variants = videos[0]['variants']
+            if videos:
+                thumbnail_url = videos[0].get('thumbnail_url', '')
+                if 'variants' in videos[0]:
+                    raw_variants = videos[0]['variants']
     except Exception:
         pass
 
-    # 2. VxTwitter API
+    # 2. VxTwitter API (สำรอง)
     if not raw_variants:
         try:
             r2 = requests.get(f"https://api.vxtwitter.com/i/status/{tweet_id}", headers=headers, timeout=5)
@@ -134,26 +191,16 @@ def get_video():
                 d2 = r2.json()
                 media = d2.get('media_extended', [])
                 for item in media:
-                    if item.get('type') == 'video' and 'variants' in item:
-                        raw_variants = item['variants']
-                        break
-        except Exception:
-            pass
-
-    # 3. Twitter Syndication API
-    if not raw_variants:
-        try:
-            r3 = requests.get(f"https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&token=x", headers=headers, timeout=5)
-            if r3.status_code == 200:
-                d3 = r3.json()
-                video_data = d3.get('video', {})
-                if 'variants' in video_data:
-                    raw_variants = video_data['variants']
+                    if item.get('type') == 'video':
+                        thumbnail_url = item.get('thumbnail_url', '')
+                        if 'variants' in item:
+                            raw_variants = item['variants']
+                            break
         except Exception:
             pass
 
     if not raw_variants:
-        return jsonify({'error': 'ไม่พบวิดีโอในโพสต์นี้ หรือโพสต์อาจถูกลบ/จำกัดสิทธิ์'}), 400
+        return jsonify({'error': 'ไม่พบวิดีโอในโพสต์นี้'}), 400
 
     results = []
     seen_urls = set()
@@ -202,7 +249,10 @@ def get_video():
     if not results:
         return jsonify({'error': 'ไม่สามารถดึงไฟล์วิดีโอได้'}), 400
 
-    return jsonify({'videos': results})
+    return jsonify({
+        'thumbnail': thumbnail_url,
+        'videos': results
+    })
 
 @app.route('/download-file')
 def download_file():
@@ -228,4 +278,4 @@ def download_file():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-  
+
