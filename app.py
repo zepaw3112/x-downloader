@@ -398,4 +398,52 @@ def get_media():
                                 else: img_url = preview
                             if img_url and not is_profile_image(img_url):
                                 items.append({'type': 'photo', 'platform': platform_name, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
+           except Exception:
+                pass
+
+        if items:
+            return jsonify({'items': items})
+
+        # 4. Open Graph Scraping Fallback
+        if page_html:
+            def get_meta(prop):
+                m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
+                    re.search(r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']', page_html, re.I)
+                return html.unescape(m.group(1)) if m else None
+
+            og_vid = get_meta('og:video') or get_meta('og:video:secure_url')
+            og_img = get_meta('og:image')
+            og_dur = format_sec(get_meta('video:duration') or get_meta('og:video:duration') or get_meta('duration'))
+
+            if og_vid:
+                items.append({'type': 'video', 'platform': platform_name, 'preview': og_img or og_vid, 'duration': og_dur, 'options': [{'label': 'HD Video', 'url': og_vid}]})
+                return jsonify({'items': items})
+            elif og_img and not is_profile_image(og_img):
+                items.append({'type': 'photo', 'platform': platform_name, 'preview': og_img, 'options': [{'label': 'HD Photo', 'url': og_img}]})
+                return jsonify({'items': items})
+
+        return jsonify({'error': 'ไม่สามารถดึงข้อมูลจากลิงก์นี้ได้ โปรดตรวจสอบว่าเป็นโพสต์สาธารณะ'}), 400
+
+    except Exception as err:
+        return jsonify({'error': f'เกิดข้อผิดพลาดจากเซิร์ฟเวอร์: {str(err)}'}), 500
+
+@app.route('/download-file')
+def download_file():
+    media_url = request.args.get('url')
+    media_type = request.args.get('type', 'video')
+    if not media_url: return "Missing URL", 400
+    headers = {'User-Agent': BROWSER_UA}
+    try:
+        req = requests.get(media_url, headers=headers, stream=True)
+        ext = "jpg" if media_type == 'photo' else "mp4"
+        return Response(
+            stream_with_context(req.iter_content(chunk_size=1024 * 64)),
+            content_type=req.headers.get('content-type', 'application/octet-stream'),
+            headers={'Content-Disposition': f'attachment; filename="media_download.{ext}"'}
+        )
+    except Exception as e:
+        return f"Download failed: {str(e)}", 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)                     
     
