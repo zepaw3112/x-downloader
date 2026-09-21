@@ -1,4 +1,5 @@
 import re
+import html
 import requests
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 
@@ -10,7 +11,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>𝕏 / IG / FB Media Downloader</title>
+    <title>𝕏 / IG / FB Universal Downloader</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#08090c">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -30,7 +31,6 @@ HTML_TEMPLATE = """
             position: relative;
         }
 
-        /* iOS Ambient Glow Background */
         .ambient-glow-1 {
             position: fixed; top: -100px; left: -80px; width: 320px; height: 320px;
             background: radial-gradient(circle, rgba(29, 155, 240, 0.4) 0%, rgba(0,0,0,0) 70%);
@@ -44,7 +44,6 @@ HTML_TEMPLATE = """
 
         .container { width: 100%; max-width: 460px; z-index: 1; }
 
-        /* Header Style */
         .header { text-align: center; margin-bottom: 24px; }
         .header h1 { 
             font-size: 24px; font-weight: 800; letter-spacing: -0.5px;
@@ -54,11 +53,9 @@ HTML_TEMPLATE = """
         }
         .header p { font-size: 13px; color: rgba(235, 235, 245, 0.6); margin: 0; font-weight: 400; }
 
-        /* Supported Badges */
         .platform-tags { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
         .tag { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #aaa; }
 
-        /* Glass Search Box */
         .search-card {
             background: rgba(255, 255, 255, 0.06);
             backdrop-filter: blur(30px) saturate(200%);
@@ -88,10 +85,8 @@ HTML_TEMPLATE = """
         }
         .search-card button:active { transform: scale(0.95); opacity: 0.9; }
 
-        /* Media Grid Layout */
         .grid-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 
-        /* iOS Glass Cards */
         .media-card {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(25px) saturate(190%);
@@ -108,7 +103,6 @@ HTML_TEMPLATE = """
         }
         .preview-wrapper img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* Floating Frosted Badges */
         .badge-glass {
             position: absolute;
             background: rgba(15, 15, 20, 0.65);
@@ -123,7 +117,6 @@ HTML_TEMPLATE = """
 
         .card-action { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 
-        /* Glass Select Dropdown */
         .glass-select {
             width: 100%;
             background: rgba(255, 255, 255, 0.08);
@@ -170,7 +163,7 @@ HTML_TEMPLATE = """
             <button onclick="fetchMedia()" id="submitBtn">สแกน</button>
         </div>
 
-        <div class="loading-box" id="loading">✨ กำลังดึงข้อมูลสื่อและจัดหมวดหมู่...</div>
+        <div class="loading-box" id="loading">✨ กำลังประมวลผลลิงก์...</div>
         <div class="grid-container" id="mediaGrid"></div>
     </div>
 
@@ -216,12 +209,12 @@ HTML_TEMPLATE = """
                         });
                         selectHtml += `</select>`;
                     } else if (item.options && item.options.length === 1) {
-                        selectHtml = `<div style="font-size: 11px; color: #8e8e93; text-align: center;">ความละเอียดสูงสุด (${item.options[0].label})</div>`;
+                        selectHtml = `<div style="font-size: 11px; color: #8e8e93; text-align: center;">${item.options[0].label}</div>`;
                     }
 
                     card.innerHTML = `
                         <div class="preview-wrapper">
-                            <img src="${item.preview}" alt="preview" loading="lazy">
+                            <img src="${item.preview}" alt="preview" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=300'">
                             <span class="badge-glass badge-type">${item.type === 'video' ? '🎥 VIDEO' : '🖼️ PHOTO'}</span>
                             <span class="badge-glass badge-platform">${item.platform}</span>
                         </div>
@@ -278,117 +271,154 @@ def manifest():
 def sw():
     return Response("self.addEventListener('fetch', function(e) {});", mimetype='application/javascript')
 
+# --- Engine: Instagram Scraper ---
+def parse_instagram(url):
+    match = re.search(r'/(p|reel|reels|tv)/([A-Za-z0-9_-]+)', url)
+    if not match:
+        return None, "ลิงก์ Instagram ไม่ถูกต้อง"
+    
+    shortcode = match.group(2)
+    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
+    
+    try:
+        r = requests.get(embed_url, headers=headers, timeout=7)
+        if r.status_code == 200:
+            raw_html = html.unescape(r.text.replace('\\/', '/').replace('\\u0026', '&'))
+            
+            # Extract Video
+            v_match = re.search(r'video_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
+                      re.search(r'<meta property="og:video"\s+content="([^"]+)"', raw_html) or \
+                      re.search(r'class="EmbeddedMediaVideo"[^>]*src="([^"]+)"', raw_html)
+            
+            # Extract Image
+            i_match = re.search(r'display_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
+                      re.search(r'<meta property="og:image"\s+content="([^"]+)"', raw_html) or \
+                      re.search(r'class="EmbeddedMediaImage"[^>]*src="([^"]+)"', raw_html)
+
+            video_url = v_match.group(1) if v_match else None
+            img_url = i_match.group(1) if i_match else None
+
+            if video_url:
+                return [{
+                    'type': 'video',
+                    'platform': 'Instagram',
+                    'preview': img_url or video_url,
+                    'options': [{'label': 'HD Reel / Video', 'url': video_url, 'size': 'MP4'}]
+                }], None
+            elif img_url:
+                return [{
+                    'type': 'photo',
+                    'platform': 'Instagram',
+                    'preview': img_url,
+                    'options': [{'label': 'HD Photo', 'url': img_url, 'size': 'JPG'}]
+                }], None
+    except Exception as e:
+        pass
+
+    return None, "ไม่สามารถดึงข้อมูลจาก Instagram ได้ (โปรดตรวจสอบว่าโพสต์ตั้งค่าเป็นสาธารณะหรือไม่)"
+
+# --- Engine: Facebook Scraper ---
+def parse_facebook(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
+    try:
+        clean_url = url.split('?')[0]
+        r = requests.get(clean_url, headers=headers, timeout=7)
+        if r.status_code == 200:
+            raw_html = r.text.replace('\\/', '/')
+            options = []
+            
+            hd_match = re.search(r'browser_native_hd_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
+                       re.search(r'hd_src["\']\s*:\s*["\']([^"']+)["\']', raw_html)
+            sd_match = re.search(r'browser_native_sd_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
+                       re.search(r'sd_src["\']\s*:\s*["\']([^"']+)["\']', raw_html)
+            
+            if hd_match:
+                options.append({'label': 'HD Quality', 'url': hd_match.group(1).encode().decode('unicode-escape'), 'size': ''})
+            if sd_match:
+                options.append({'label': 'SD Quality', 'url': sd_match.group(1).encode().decode('unicode-escape'), 'size': ''})
+
+            if options:
+                return [{
+                    'type': 'video',
+                    'platform': 'Facebook',
+                    'preview': options[0]['url'],
+                    'options': options
+                }], None
+    except Exception:
+        pass
+
+    return None, "ไม่สามารถดึงข้อมูลคลิปจาก Facebook ได้"
+
 @app.route('/get-media', methods=['POST'])
 def get_media():
     raw_url = request.json.get('url', '').strip()
     if not raw_url:
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://x.com/'}
-    items = []
-
-    # 1. จัดการ X (Twitter)
+    # 1. X (Twitter)
     if 'twitter.com' in raw_url or 'x.com' in raw_url:
         match = re.search(r'status/(\d+)', raw_url)
         if not match:
             return jsonify({'error': 'ลิงก์ X ไม่ถูกต้อง'}), 400
-        tweet_id = match.group(1)
         
+        tweet_id = match.group(1)
+        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://x.com/'}
+        items = []
+
         try:
             r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
             if r.status_code == 200:
                 tweet = r.json().get('tweet', {})
                 media = tweet.get('media', {})
 
-                # Photos
                 for idx, p in enumerate(media.get('photos', []), 1):
                     p_url = p.get('url', '')
                     if p_url:
                         items.append({
-                            'type': 'photo',
-                            'platform': '𝕏',
-                            'preview': p_url,
+                            'type': 'photo', 'platform': '𝕏', 'preview': p_url,
                             'options': [{'label': f'ภาพที่ {idx} (HD)', 'url': p_url, 'size': ''}]
                         })
 
-                # Videos (Group Multiple Resolutions into 1 Item!)
                 for idx, v in enumerate(media.get('videos', []), 1):
                     thumb = v.get('thumbnail_url', '')
-                    variants = v.get('variants', [])
-                    
-                    valid_variants = [item for item in variants if item.get('url', '').split('?')[0].endswith('.mp4')]
-                    valid_variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                    variants = [item for item in v.get('variants', []) if item.get('url', '').split('?')[0].endswith('.mp4')]
+                    variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
 
                     video_options = []
-                    for var in valid_variants:
+                    for var in variants:
                         v_url = var.get('url', '')
                         res_match = re.search(r'/(\d+)x(\d+)/', v_url)
                         res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
-
-                        size_str = ""
-                        try:
-                            h_res = requests.head(v_url, headers=headers, timeout=1.5)
-                            cl = h_res.headers.get('content-length')
-                            if cl and cl.isdigit():
-                                size_str = f"{round(int(cl) / (1024 * 1024), 1)} MB"
-                        except: pass
-
-                        video_options.append({
-                            'label': res_label,
-                            'url': v_url,
-                            'size': size_str
-                        })
+                        video_options.append({'label': res_label, 'url': v_url, 'size': ''})
 
                     if video_options:
-                        items.append({
-                            'type': 'video',
-                            'platform': '𝕏',
-                            'preview': thumb,
-                            'options': video_options
-                        })
+                        items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'options': video_options})
+                
+                return jsonify({'items': items})
         except Exception:
             return jsonify({'error': 'ไม่สามารถเชื่อมต่อระบบ X ได้'}), 500
 
-    # 2. จัดการ Instagram / Facebook (ใช้ Cobalt API Proxy)
-    elif any(domain in raw_url for domain in ['instagram.com', 'instagr.am', 'facebook.com', 'fb.watch', 'fb.gg']):
-        platform_name = "Instagram" if "inst" in raw_url else "Facebook"
-        try:
-            cobalt_res = requests.post(
-                "https://api.cobalt.tools/",
-                json={"url": raw_url},
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-                timeout=8
-            )
-            data = cobalt_res.json()
-            
-            if data.get('status') == 'picker':
-                for idx, p in enumerate(data.get('picker', []), 1):
-                    p_type = 'video' if p.get('type') == 'video' else 'photo'
-                    p_url = p.get('url')
-                    p_thumb = p.get('thumb') or p_url
-                    items.append({
-                        'type': p_type,
-                        'platform': platform_name,
-                        'preview': p_thumb,
-                        'options': [{'label': f'สื่อที่ {idx}', 'url': p_url, 'size': 'HD'}]
-                    })
-            elif data.get('status') in ['tunnel', 'redirect']:
-                media_url = data.get('url')
-                items.append({
-                    'type': 'video' if '.mp4' in media_url else 'photo',
-                    'platform': platform_name,
-                    'preview': media_url,
-                    'options': [{'label': 'ความละเอียดสูงสุด (HD)', 'url': media_url, 'size': ''}]
-                })
-        except Exception:
-            return jsonify({'error': f'ไม่สามารถดึงข้อมูลจาก {platform_name} ได้'}), 500
+    # 2. Instagram
+    elif 'instagram.com' in raw_url or 'instagr.am' in raw_url:
+        items, err = parse_instagram(raw_url)
+        if err: return jsonify({'error': err}), 400
+        return jsonify({'items': items})
+
+    # 3. Facebook
+    elif 'facebook.com' in raw_url or 'fb.watch' in raw_url or 'fb.gg' in raw_url:
+        items, err = parse_facebook(raw_url)
+        if err: return jsonify({'error': err}), 400
+        return jsonify({'items': items})
+
     else:
         return jsonify({'error': 'รองรับเฉพาะลิงก์ X, Instagram และ Facebook เท่านั้น'}), 400
-
-    if not items:
-        return jsonify({'error': 'ไม่พบสื่อในลิงก์นี้'}), 400
-
-    return jsonify({'items': items})
 
 @app.route('/download-file')
 def download_file():
@@ -397,7 +427,7 @@ def download_file():
     
     if not media_url: return "Missing URL", 400
 
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     req = requests.get(media_url, headers=headers, stream=True)
     
     ext = "jpg" if media_type == 'photo' else "mp4"
@@ -411,4 +441,4 @@ def download_file():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-    
+
