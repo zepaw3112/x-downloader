@@ -13,8 +13,7 @@ try:
 except ImportError:
     HAS_YTDLP = False
 
-# User-Agents สำหรับหลบหลีกการบล็อก
-CRAWLER_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+# User-Agents สำหรับดึงข้อมูล
 BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
 
@@ -24,7 +23,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>𝕏 / IG / FB Universal Downloader</title>
+    <title>𝕏 / IG Downloader</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#08090c">
     <style>
@@ -37,7 +36,7 @@ HTML_TEMPLATE = """
         .header h1 { font-size: 24px; font-weight: 800; background: linear-gradient(135deg, #ffffff 20%, #70baff 60%, #e1306c 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0 0 6px 0; }
         .header p { font-size: 13px; color: rgba(235, 235, 245, 0.6); margin: 0; }
         .platform-tags { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
-        .tag { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #aaa; }
+        .tag { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #ccc; }
         .search-card { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(30px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 22px; padding: 6px; display: flex; gap: 8px; margin-bottom: 24px; }
         .search-card input { flex: 1; background: transparent; border: none; padding: 14px 16px; color: #fff; font-size: 14px; outline: none; }
         .search-card button { background: linear-gradient(135deg, #1d9bf0 0%, #0072c6 100%); color: #fff; border: none; border-radius: 16px; padding: 0 20px; font-weight: 600; cursor: pointer; }
@@ -61,16 +60,15 @@ HTML_TEMPLATE = """
     <div class="ambient-glow-2"></div>
     <div class="container">
         <div class="header">
-            <h1>𝕏 Universal Downloader</h1>
-            <p>วางลิงก์ X, Instagram หรือ Facebook เพื่อดาวน์โหลด</p>
+            <h1>𝕏 / IG Downloader</h1>
+            <p>วางลิงก์ X หรือ Instagram เพื่อดาวน์โหลดรูปและวิดีโอ</p>
             <div class="platform-tags">
                 <span class="tag">𝕏 Twitter</span>
                 <span class="tag">📸 Instagram</span>
-                <span class="tag">📘 Facebook</span>
             </div>
         </div>
         <div class="search-card">
-            <input type="text" id="urlInput" placeholder="วางลิงก์ที่นี่...">
+            <input type="text" id="urlInput" placeholder="วางลิงก์ X หรือ IG ที่นี่...">
             <button onclick="fetchMedia()" id="submitBtn">สแกน</button>
         </div>
         <div class="loading-box" id="loading">✨ กำลังแกะลิงก์และประมวลผล...</div>
@@ -165,11 +163,10 @@ def detect_platform(url):
     u = url.lower()
     if 'twitter.com' in u or 'x.com' in u: return '𝕏'
     if 'instagram.com' in u or 'instagr.am' in u: return 'Instagram'
-    if 'facebook.com' in u or 'fb.watch' in u or 'fb.com' in u: return 'Facebook'
     return 'Media'
 
 def resolve_url(raw_url):
-    headers = {'User-Agent': CRAWLER_UA}
+    headers = {'User-Agent': BROWSER_UA}
     try:
         r = requests.get(raw_url, headers=headers, allow_redirects=True, timeout=8)
         return r.url, r.text
@@ -341,11 +338,13 @@ def get_media():
         final_url, page_html = resolve_url(raw_url)
         platform_name = detect_platform(final_url)
 
+        # 1. ดึงข้อมูล 𝕏 (Twitter)
         if platform_name == '𝕏':
             x_items = extract_x_media(final_url)
             if x_items:
                 return jsonify({'items': x_items})
 
+        # 2. ดึงข้อมูล Instagram
         if platform_name == 'Instagram':
             ig_items = extract_ig_media(final_url)
             if ig_items:
@@ -353,7 +352,8 @@ def get_media():
 
         items = []
 
-        if HAS_YTDLP:
+        # 3. Fallback ด้วย yt-dlp เฉพาะ X และ IG
+        if HAS_YTDLP and platform_name in ['𝕏', 'Instagram']:
             try:
                 ydl_opts = {
                     'quiet': True,
@@ -400,24 +400,7 @@ def get_media():
         if items:
             return jsonify({'items': items})
 
-        if page_html:
-            def get_meta(prop):
-                m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
-                    re.search(r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']', page_html, re.I)
-                return html.unescape(m.group(1)) if m else None
-
-            og_vid = get_meta('og:video') or get_meta('og:video:secure_url')
-            og_img = get_meta('og:image')
-            og_dur = format_sec(get_meta('video:duration') or get_meta('og:video:duration') or get_meta('duration'))
-
-            if og_vid:
-                items.append({'type': 'video', 'platform': platform_name, 'preview': og_img or og_vid, 'duration': og_dur, 'options': [{'label': 'HD Video', 'url': og_vid}]})
-                return jsonify({'items': items})
-            elif og_img and not is_profile_image(og_img):
-                items.append({'type': 'photo', 'platform': platform_name, 'preview': og_img, 'options': [{'label': 'HD Photo', 'url': og_img}]})
-                return jsonify({'items': items})
-
-        return jsonify({'error': 'ไม่สามารถดึงข้อมูลจากลิงก์นี้ได้ โปรดตรวจสอบว่าเป็นโพสต์สาธารณะ'}), 400
+        return jsonify({'error': 'รองรับเฉพาะลิงก์โพสต์สาธารณะจาก 𝕏 (Twitter) และ Instagram เท่านั้น'}), 400
 
     except Exception as err:
         return jsonify({'error': f'เกิดข้อผิดพลาดจากเซิร์ฟเวอร์: {str(err)}'}), 500
@@ -442,4 +425,4 @@ def download_file():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-                
+       
