@@ -11,6 +11,10 @@ try:
 except ImportError:
     HAS_YTDLP = False
 
+# User-Agents สำหรับหลบหลีกการบล็อกของ FB / IG / X
+CRAWLER_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="th">
@@ -139,8 +143,10 @@ HTML_TEMPLATE = """
 def format_sec(seconds):
     if not seconds: return None
     try:
-        sec = int(float(seconds))
-        m, s = divmod(sec, 60)
+        sec = float(seconds)
+        if sec <= 0: return None
+        if sec > 1000: sec = sec / 1000 # ป้องกันกรณีส่งมาเป็น milliseconds
+        m, s = divmod(int(sec), 60)
         h, m = divmod(m, 60)
         return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
     except:
@@ -160,7 +166,8 @@ def detect_platform(url):
     return 'Media'
 
 def resolve_url(raw_url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+    # ใช้ Crawler UA เพื่อปลดสิทธิ์ลิงก์แชร์ /share/ และ fb.watch
+    headers = {'User-Agent': CRAWLER_UA}
     try:
         r = requests.get(raw_url, headers=headers, allow_redirects=True, timeout=8)
         return r.url, r.text
@@ -171,9 +178,9 @@ def extract_x_media(final_url):
     match = re.search(r'status/(\d+)', final_url)
     if not match: return None
     tweet_id = match.group(1)
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    headers = {'User-Agent': BROWSER_UA}
     
-    # 1. Try FXTwitter API
+    # 1. FXTwitter API
     try:
         r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
         if r.status_code == 200:
@@ -185,7 +192,9 @@ def extract_x_media(final_url):
             videos = media.get('videos', [])
             for v in videos:
                 thumb = v.get('thumbnail_url') or v.get('url')
-                dur = format_sec(v.get('duration_millis', 0) / 1000) if v.get('duration_millis') else None
+                dur_raw = v.get('duration') or v.get('duration_millis') or v.get('duration_seconds')
+                dur = format_sec(dur_raw)
+                
                 variants = [var for var in v.get('variants', []) if var.get('url', '').split('?')[0].endswith('.mp4')]
                 variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
                 
@@ -216,7 +225,7 @@ def extract_x_media(final_url):
     except Exception:
         pass
 
-    # 2. Try VXTwitter API Fallback
+    # 2. VXTwitter API Fallback
     try:
         r = requests.get(f"https://api.vxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
         if r.status_code == 200:
@@ -227,7 +236,7 @@ def extract_x_media(final_url):
                 if m_type in ['video', 'gif']:
                     v_url = m.get('url')
                     thumb = m.get('thumbnail_url') or v_url
-                    dur = format_sec(m.get('duration')) if m.get('duration') else None
+                    dur = format_sec(m.get('duration'))
                     if v_url:
                         items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': [{'label': 'HD Video', 'url': v_url}]})
                 elif m_type == 'image':
@@ -261,7 +270,7 @@ def get_media():
     final_url, page_html = resolve_url(raw_url)
     platform_name = detect_platform(final_url)
 
-    # หากเป็นลิงก์ X ให้ดึงผ่าน API เฉพาะทางก่อนทันที
+    # 1. จัดการ X (Twitter)
     if platform_name == '𝕏':
         x_items = extract_x_media(final_url)
         if x_items:
@@ -269,14 +278,14 @@ def get_media():
 
     items = []
 
-    # ดึงข้อมูลผ่าน yt-dlp สำหรับแพลตฟอร์มอื่น
+    # 2. ดึงผ่าน yt-dlp
     if HAS_YTDLP:
         try:
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
                 'skip_download': True,
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                'user_agent': BROWSER_UA
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(final_url, download=False)
@@ -317,7 +326,7 @@ def get_media():
     if items:
         return jsonify({'items': items})
 
-    # ระบบสำรอง Open Graph Scraping
+    # 3. ระบบสำรอง Open Graph Scraping (ใช้ Crawler UA ปลดล็อกรูปภาพ FB/IG)
     if page_html:
         def get_meta(prop):
             m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
@@ -326,7 +335,7 @@ def get_media():
 
         og_vid = get_meta('og:video') or get_meta('og:video:secure_url')
         og_img = get_meta('og:image')
-        og_dur = format_sec(get_meta('video:duration') or get_meta('og:video:duration'))
+        og_dur = format_sec(get_meta('video:duration') or get_meta('og:video:duration') or get_meta('duration'))
 
         if og_vid:
             items.append({'type': 'video', 'platform': platform_name, 'preview': og_img or og_vid, 'duration': og_dur, 'options': [{'label': 'HD Video', 'url': og_vid}]})
@@ -342,7 +351,7 @@ def download_file():
     media_url = request.args.get('url')
     media_type = request.args.get('type', 'video')
     if not media_url: return "Missing URL", 400
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    headers = {'User-Agent': BROWSER_UA}
     req = requests.get(media_url, headers=headers, stream=True)
     ext = "jpg" if media_type == 'photo' else "mp4"
     return Response(
@@ -353,4 +362,4 @@ def download_file():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
+                    
