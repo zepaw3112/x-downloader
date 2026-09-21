@@ -10,9 +10,9 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>𝕏 Glass Downloader</title>
+    <title>𝕏 / IG / FB Media Downloader</title>
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#0d0e12">
+    <meta name="theme-color" content="#08090c">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <style>
@@ -33,31 +33,30 @@ HTML_TEMPLATE = """
         /* iOS Ambient Glow Background */
         .ambient-glow-1 {
             position: fixed; top: -100px; left: -80px; width: 320px; height: 320px;
-            background: radial-gradient(circle, rgba(29, 155, 240, 0.45) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(60px); z-index: -1; pointer-events: none;
+            background: radial-gradient(circle, rgba(29, 155, 240, 0.4) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(65px); z-index: -1; pointer-events: none;
         }
         .ambient-glow-2 {
-            position: fixed; top: 35%; right: -100px; width: 350px; height: 350px;
-            background: radial-gradient(circle, rgba(147, 51, 234, 0.35) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(70px); z-index: -1; pointer-events: none;
-        }
-        .ambient-glow-3 {
-            position: fixed; bottom: -50px; left: 10%; width: 300px; height: 300px;
-            background: radial-gradient(circle, rgba(0, 186, 124, 0.25) 0%, rgba(0,0,0,0) 70%);
-            filter: blur(60px); z-index: -1; pointer-events: none;
+            position: fixed; top: 40%; right: -100px; width: 350px; height: 350px;
+            background: radial-gradient(circle, rgba(225, 48, 108, 0.35) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(75px); z-index: -1; pointer-events: none;
         }
 
         .container { width: 100%; max-width: 460px; z-index: 1; }
 
         /* Header Style */
-        .header { text-align: center; margin-bottom: 24px; padding-top: 8px; }
+        .header { text-align: center; margin-bottom: 24px; }
         .header h1 { 
-            font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
-            background: linear-gradient(135deg, #ffffff 30%, #70baff 100%);
+            font-size: 24px; font-weight: 800; letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff 20%, #70baff 60%, #e1306c 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             margin: 0 0 6px 0; 
         }
         .header p { font-size: 13px; color: rgba(235, 235, 245, 0.6); margin: 0; font-weight: 400; }
+
+        /* Supported Badges */
+        .platform-tags { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
+        .tag { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #aaa; }
 
         /* Glass Search Box */
         .search-card {
@@ -101,39 +100,50 @@ HTML_TEMPLATE = """
             box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.12);
             border-radius: 20px; overflow: hidden;
             display: flex; flex-direction: column;
-            transition: transform 0.3s ease, border-color 0.3s ease;
         }
-        .media-card:active { transform: scale(0.98); }
 
         .preview-wrapper {
-            width: 100%; height: 180px; background: rgba(0, 0, 0, 0.4);
+            width: 100%; height: 170px; background: rgba(0, 0, 0, 0.4);
             position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden;
         }
-        .preview-wrapper img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.5s ease; }
-        .media-card:hover .preview-wrapper img { transform: scale(1.05); }
+        .preview-wrapper img { width: 100%; height: 100%; object-fit: cover; }
 
         /* Floating Frosted Badges */
         .badge-glass {
             position: absolute;
-            background: rgba(15, 15, 20, 0.6);
+            background: rgba(15, 15, 20, 0.65);
             backdrop-filter: blur(12px) saturate(180%);
             -webkit-backdrop-filter: blur(12px) saturate(180%);
             border: 1px solid rgba(255, 255, 255, 0.15);
-            color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.3px;
+            color: #fff; font-size: 10px; font-weight: 700;
             padding: 4px 8px; border-radius: 8px;
         }
         .badge-type { top: 10px; left: 10px; }
-        .badge-size { top: 10px; right: 10px; color: #70baff; }
-        .badge-res { bottom: 10px; left: 10px; }
+        .badge-platform { top: 10px; right: 10px; color: #70baff; text-transform: uppercase; }
 
-        .card-action { padding: 10px; }
+        .card-action { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+        /* Glass Select Dropdown */
+        .glass-select {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.08);
+            color: #f5f5f7;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 8px 10px;
+            border-radius: 10px;
+            font-size: 12px; font-weight: 600;
+            outline: none;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+        }
+        .glass-select option { background: #1c1c1e; color: #fff; }
+
         .dl-btn {
             display: flex; align-items: center; justify-content: center; gap: 6px;
-            width: 100%; background: rgba(255, 255, 255, 0.08);
-            color: #34c759; border: 1px solid rgba(52, 199, 89, 0.25);
-            padding: 10px 0; border-radius: 12px; font-size: 12px; font-weight: 700;
-            text-decoration: none; cursor: pointer; backdrop-filter: blur(10px);
-            transition: all 0.2s ease;
+            width: 100%; background: rgba(52, 199, 89, 0.15);
+            color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3);
+            padding: 10px 0; border-radius: 10px; font-size: 12px; font-weight: 700;
+            text-decoration: none; cursor: pointer; transition: all 0.2s ease;
         }
         .dl-btn:active { background: #34c759; color: #fff; box-shadow: 0 4px 15px rgba(52, 199, 89, 0.4); }
 
@@ -143,24 +153,30 @@ HTML_TEMPLATE = """
 <body>
     <div class="ambient-glow-1"></div>
     <div class="ambient-glow-2"></div>
-    <div class="ambient-glow-3"></div>
 
     <div class="container">
         <div class="header">
-            <h1>𝕏 Media Downloader</h1>
-            <p>สัมผัสประสบการณ์ดาวน์โหลดระดับ Premium</p>
+            <h1>𝕏 Universal Downloader</h1>
+            <p>วางลิงก์ X, Instagram หรือ Facebook เพื่อดาวน์โหลด</p>
+            <div class="platform-tags">
+                <span class="tag">𝕏 Twitter</span>
+                <span class="tag">📸 Instagram</span>
+                <span class="tag">📘 Facebook</span>
+            </div>
         </div>
 
         <div class="search-card">
-            <input type="text" id="urlInput" placeholder="วางลิงก์ X (Twitter) ที่นี่...">
+            <input type="text" id="urlInput" placeholder="วางลิงก์ที่นี่...">
             <button onclick="fetchMedia()" id="submitBtn">สแกน</button>
         </div>
 
-        <div class="loading-box" id="loading">✨ กำลังประมวลผลสื่อระดับ HD...</div>
+        <div class="loading-box" id="loading">✨ กำลังดึงข้อมูลสื่อและจัดหมวดหมู่...</div>
         <div class="grid-container" id="mediaGrid"></div>
     </div>
 
     <script>
+        let fetchedItems = [];
+
         async function fetchMedia() {
             const url = document.getElementById('urlInput').value.trim();
             if(!url) return alert('กรุณาใส่ลิงก์ก่อนครับ');
@@ -186,20 +202,34 @@ HTML_TEMPLATE = """
 
                 if(data.error) return alert(data.error);
 
-                data.items.forEach(item => {
+                fetchedItems = data.items;
+
+                fetchedItems.forEach((item, index) => {
                     const card = document.createElement('div');
                     card.className = 'media-card';
+                    
+                    let selectHtml = '';
+                    if(item.options && item.options.length > 1) {
+                        selectHtml = `<select class="glass-select" id="select-${index}">`;
+                        item.options.forEach((opt, optIdx) => {
+                            selectHtml += `<option value="${optIdx}">${opt.label} ${opt.size ? '· ' + opt.size : ''}</option>`;
+                        });
+                        selectHtml += `</select>`;
+                    } else if (item.options && item.options.length === 1) {
+                        selectHtml = `<div style="font-size: 11px; color: #8e8e93; text-align: center;">ความละเอียดสูงสุด (${item.options[0].label})</div>`;
+                    }
+
                     card.innerHTML = `
                         <div class="preview-wrapper">
                             <img src="${item.preview}" alt="preview" loading="lazy">
                             <span class="badge-glass badge-type">${item.type === 'video' ? '🎥 VIDEO' : '🖼️ PHOTO'}</span>
-                            <span class="badge-glass badge-size">${item.size}</span>
-                            <span class="badge-glass badge-res">${item.res}</span>
+                            <span class="badge-glass badge-platform">${item.platform}</span>
                         </div>
                         <div class="card-action">
-                            <a href="/download-file?url=${encodeURIComponent(item.download_url)}&type=${item.type}" class="dl-btn">
+                            ${selectHtml}
+                            <button onclick="downloadItem(${index})" class="dl-btn">
                                 ⬇️ ดาวน์โหลด
-                            </a>
+                            </button>
                         </div>
                     `;
                     grid.appendChild(card);
@@ -207,8 +237,22 @@ HTML_TEMPLATE = """
             } catch (e) {
                 btn.disabled = false;
                 loading.style.display = 'none';
-                alert('เกิดข้อผิดพลาดในการโหลดข้อมูล');
+                alert('เกิดข้อผิดพลาดในการดึงข้อมูล');
             }
+        }
+
+        function downloadItem(index) {
+            const item = fetchedItems[index];
+            if(!item) return;
+
+            let targetUrl = item.options[0].url;
+            const selectElem = document.getElementById(`select-${index}`);
+            if(selectElem) {
+                const selectedOptIndex = selectElem.value;
+                targetUrl = item.options[selectedOptIndex].url;
+            }
+
+            window.location.href = `/download-file?url=${encodeURIComponent(targetUrl)}&type=${item.type}`;
         }
     </script>
 </body>
@@ -222,8 +266,8 @@ def index():
 @app.route('/manifest.json')
 def manifest():
     return jsonify({
-        "name": "X Glass Downloader",
-        "short_name": "𝕏 Glass",
+        "name": "Universal Downloader",
+        "short_name": "Downloader",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#08090c",
@@ -237,70 +281,109 @@ def sw():
 @app.route('/get-media', methods=['POST'])
 def get_media():
     raw_url = request.json.get('url', '').strip()
-    match = re.search(r'status/(\d+)', raw_url)
-    if not match:
-        return jsonify({'error': 'ลิงก์ไม่ถูกต้อง'}), 400
-    
-    tweet_id = match.group(1)
+    if not raw_url:
+        return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
+
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://x.com/'}
     items = []
-    
-    try:
-        r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
-        if r.status_code == 200:
-            tweet = r.json().get('tweet', {})
-            media = tweet.get('media', {})
+
+    # 1. จัดการ X (Twitter)
+    if 'twitter.com' in raw_url or 'x.com' in raw_url:
+        match = re.search(r'status/(\d+)', raw_url)
+        if not match:
+            return jsonify({'error': 'ลิงก์ X ไม่ถูกต้อง'}), 400
+        tweet_id = match.group(1)
+        
+        try:
+            r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
+            if r.status_code == 200:
+                tweet = r.json().get('tweet', {})
+                media = tweet.get('media', {})
+
+                # Photos
+                for idx, p in enumerate(media.get('photos', []), 1):
+                    p_url = p.get('url', '')
+                    if p_url:
+                        items.append({
+                            'type': 'photo',
+                            'platform': '𝕏',
+                            'preview': p_url,
+                            'options': [{'label': f'ภาพที่ {idx} (HD)', 'url': p_url, 'size': ''}]
+                        })
+
+                # Videos (Group Multiple Resolutions into 1 Item!)
+                for idx, v in enumerate(media.get('videos', []), 1):
+                    thumb = v.get('thumbnail_url', '')
+                    variants = v.get('variants', [])
+                    
+                    valid_variants = [item for item in variants if item.get('url', '').split('?')[0].endswith('.mp4')]
+                    valid_variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+
+                    video_options = []
+                    for var in valid_variants:
+                        v_url = var.get('url', '')
+                        res_match = re.search(r'/(\d+)x(\d+)/', v_url)
+                        res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
+
+                        size_str = ""
+                        try:
+                            h_res = requests.head(v_url, headers=headers, timeout=1.5)
+                            cl = h_res.headers.get('content-length')
+                            if cl and cl.isdigit():
+                                size_str = f"{round(int(cl) / (1024 * 1024), 1)} MB"
+                        except: pass
+
+                        video_options.append({
+                            'label': res_label,
+                            'url': v_url,
+                            'size': size_str
+                        })
+
+                    if video_options:
+                        items.append({
+                            'type': 'video',
+                            'platform': '𝕏',
+                            'preview': thumb,
+                            'options': video_options
+                        })
+        except Exception:
+            return jsonify({'error': 'ไม่สามารถเชื่อมต่อระบบ X ได้'}), 500
+
+    # 2. จัดการ Instagram / Facebook (ใช้ Cobalt API Proxy)
+    elif any(domain in raw_url for domain in ['instagram.com', 'instagr.am', 'facebook.com', 'fb.watch', 'fb.gg']):
+        platform_name = "Instagram" if "inst" in raw_url else "Facebook"
+        try:
+            cobalt_res = requests.post(
+                "https://api.cobalt.tools/",
+                json={"url": raw_url},
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=8
+            )
+            data = cobalt_res.json()
             
-            # Photos
-            photos = media.get('photos', [])
-            for idx, p in enumerate(photos, 1):
-                p_url = p.get('url', '')
-                if p_url:
+            if data.get('status') == 'picker':
+                for idx, p in enumerate(data.get('picker', []), 1):
+                    p_type = 'video' if p.get('type') == 'video' else 'photo'
+                    p_url = p.get('url')
+                    p_thumb = p.get('thumb') or p_url
                     items.append({
-                        'type': 'photo',
-                        'preview': p_url,
-                        'download_url': p_url,
-                        'res': f"ภาพที่ {idx}",
-                        'size': 'HD'
+                        'type': p_type,
+                        'platform': platform_name,
+                        'preview': p_thumb,
+                        'options': [{'label': f'สื่อที่ {idx}', 'url': p_url, 'size': 'HD'}]
                     })
-
-            # Videos
-            videos = media.get('videos', [])
-            for idx, v in enumerate(videos, 1):
-                thumb = v.get('thumbnail_url', '')
-                variants = v.get('variants', [])
-                
-                valid_variants = [item for item in variants if item.get('url', '').split('?')[0].endswith('.mp4')]
-                valid_variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-                
-                for var in valid_variants:
-                    v_url = var.get('url', '')
-                    res_match = re.search(r'/(\d+)x(\d+)/', v_url)
-                    if res_match:
-                        min_dim = min(int(res_match.group(1)), int(res_match.group(2)))
-                        res_label = f"{min_dim}p"
-                    else:
-                        res_label = "HD Video"
-
-                    size_str = "MP4"
-                    try:
-                        h_res = requests.head(v_url, headers=headers, timeout=2)
-                        cl = h_res.headers.get('content-length')
-                        if cl and cl.isdigit():
-                            size_str = f"{round(int(cl) / (1024 * 1024), 1)} MB"
-                    except Exception:
-                        pass
-
-                    items.append({
-                        'type': 'video',
-                        'preview': thumb,
-                        'download_url': v_url,
-                        'res': f"คลิป {idx} ({res_label})",
-                        'size': size_str
-                    })
-
-    except Exception:
-        return jsonify({'error': 'ไม่สามารถเชื่อมต่อดึงข้อมูลได้'}), 500
+            elif data.get('status') in ['tunnel', 'redirect']:
+                media_url = data.get('url')
+                items.append({
+                    'type': 'video' if '.mp4' in media_url else 'photo',
+                    'platform': platform_name,
+                    'preview': media_url,
+                    'options': [{'label': 'ความละเอียดสูงสุด (HD)', 'url': media_url, 'size': ''}]
+                })
+        except Exception:
+            return jsonify({'error': f'ไม่สามารถดึงข้อมูลจาก {platform_name} ได้'}), 500
+    else:
+        return jsonify({'error': 'รองรับเฉพาะลิงก์ X, Instagram และ Facebook เท่านั้น'}), 400
 
     if not items:
         return jsonify({'error': 'ไม่พบสื่อในลิงก์นี้'}), 400
@@ -312,14 +395,13 @@ def download_file():
     media_url = request.args.get('url')
     media_type = request.args.get('type', 'video')
     
-    if not media_url:
-        return "Missing URL", 400
+    if not media_url: return "Missing URL", 400
 
-    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://x.com/'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     req = requests.get(media_url, headers=headers, stream=True)
     
     ext = "jpg" if media_type == 'photo' else "mp4"
-    filename = f"x_download.{ext}"
+    filename = f"downloaded_media.{ext}"
 
     return Response(
         stream_with_context(req.iter_content(chunk_size=1024 * 64)),
@@ -329,4 +411,4 @@ def download_file():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
+    
