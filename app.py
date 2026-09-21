@@ -1,6 +1,6 @@
 import re
-import html
 import requests
+import yt_dlp
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 
 app = Flask(__name__)
@@ -163,7 +163,7 @@ HTML_TEMPLATE = """
             <button onclick="fetchMedia()" id="submitBtn">สแกน</button>
         </div>
 
-        <div class="loading-box" id="loading">✨ กำลังประมวลผลลิงก์...</div>
+        <div class="loading-box" id="loading">✨ กำลังถอดรหัสสื่อด้วย yt-dlp...</div>
         <div class="grid-container" id="mediaGrid"></div>
     </div>
 
@@ -205,7 +205,7 @@ HTML_TEMPLATE = """
                     if(item.options && item.options.length > 1) {
                         selectHtml = `<select class="glass-select" id="select-${index}">`;
                         item.options.forEach((opt, optIdx) => {
-                            selectHtml += `<option value="${optIdx}">${opt.label} ${opt.size ? '· ' + opt.size : ''}</option>`;
+                            selectHtml += `<option value="${optIdx}">${opt.label}</option>`;
                         });
                         selectHtml += `</select>`;
                     } else if (item.options && item.options.length === 1) {
@@ -271,154 +271,81 @@ def manifest():
 def sw():
     return Response("self.addEventListener('fetch', function(e) {});", mimetype='application/javascript')
 
-# --- Engine: Instagram Scraper ---
-def parse_instagram(url):
-    match = re.search(r'/(p|reel|reels|tv)/([A-Za-z0-9_-]+)', url)
-    if not match:
-        return None, "ลิงก์ Instagram ไม่ถูกต้อง"
-    
-    shortcode = match.group(2)
-    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-    }
-    
-    try:
-        r = requests.get(embed_url, headers=headers, timeout=7)
-        if r.status_code == 200:
-            raw_html = html.unescape(r.text.replace('\\/', '/').replace('\\u0026', '&'))
-            
-            # Extract Video
-            v_match = re.search(r'video_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
-                      re.search(r'<meta property="og:video"\s+content="([^"]+)"', raw_html) or \
-                      re.search(r'class="EmbeddedMediaVideo"[^>]*src="([^"]+)"', raw_html)
-            
-            # Extract Image
-            i_match = re.search(r'display_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
-                      re.search(r'<meta property="og:image"\s+content="([^"]+)"', raw_html) or \
-                      re.search(r'class="EmbeddedMediaImage"[^>]*src="([^"]+)"', raw_html)
-
-            video_url = v_match.group(1) if v_match else None
-            img_url = i_match.group(1) if i_match else None
-
-            if video_url:
-                return [{
-                    'type': 'video',
-                    'platform': 'Instagram',
-                    'preview': img_url or video_url,
-                    'options': [{'label': 'HD Reel / Video', 'url': video_url, 'size': 'MP4'}]
-                }], None
-            elif img_url:
-                return [{
-                    'type': 'photo',
-                    'platform': 'Instagram',
-                    'preview': img_url,
-                    'options': [{'label': 'HD Photo', 'url': img_url, 'size': 'JPG'}]
-                }], None
-    except Exception as e:
-        pass
-
-    return None, "ไม่สามารถดึงข้อมูลจาก Instagram ได้ (โปรดตรวจสอบว่าโพสต์ตั้งค่าเป็นสาธารณะหรือไม่)"
-
-# --- Engine: Facebook Scraper ---
-def parse_facebook(url):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-    }
-    try:
-        clean_url = url.split('?')[0]
-        r = requests.get(clean_url, headers=headers, timeout=7)
-        if r.status_code == 200:
-            raw_html = r.text.replace('\\/', '/')
-            options = []
-            
-            hd_match = re.search(r'browser_native_hd_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
-                       re.search(r'hd_src["\']\s*:\s*["\']([^"']+)["\']', raw_html)
-            sd_match = re.search(r'browser_native_sd_url["\']\s*:\s*["\']([^"']+)["\']', raw_html) or \
-                       re.search(r'sd_src["\']\s*:\s*["\']([^"']+)["\']', raw_html)
-            
-            if hd_match:
-                options.append({'label': 'HD Quality', 'url': hd_match.group(1).encode().decode('unicode-escape'), 'size': ''})
-            if sd_match:
-                options.append({'label': 'SD Quality', 'url': sd_match.group(1).encode().decode('unicode-escape'), 'size': ''})
-
-            if options:
-                return [{
-                    'type': 'video',
-                    'platform': 'Facebook',
-                    'preview': options[0]['url'],
-                    'options': options
-                }], None
-    except Exception:
-        pass
-
-    return None, "ไม่สามารถดึงข้อมูลคลิปจาก Facebook ได้"
-
 @app.route('/get-media', methods=['POST'])
 def get_media():
     raw_url = request.json.get('url', '').strip()
     if not raw_url:
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
-    # 1. X (Twitter)
-    if 'twitter.com' in raw_url or 'x.com' in raw_url:
-        match = re.search(r'status/(\d+)', raw_url)
-        if not match:
-            return jsonify({'error': 'ลิงก์ X ไม่ถูกต้อง'}), 400
-        
-        tweet_id = match.group(1)
-        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://x.com/'}
-        items = []
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'format': 'best',
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    }
 
-        try:
-            r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
-            if r.status_code == 200:
-                tweet = r.json().get('tweet', {})
-                media = tweet.get('media', {})
+    items = []
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(raw_url, download=False)
+            
+            extractor = info.get('extractor_key', '').lower()
+            if 'twitter' in extractor: platform = '𝕏'
+            elif 'instagram' in extractor: platform = 'Instagram'
+            elif 'facebook' in extractor: platform = 'Facebook'
+            else: platform = 'Media'
 
-                for idx, p in enumerate(media.get('photos', []), 1):
-                    p_url = p.get('url', '')
-                    if p_url:
-                        items.append({
-                            'type': 'photo', 'platform': '𝕏', 'preview': p_url,
-                            'options': [{'label': f'ภาพที่ {idx} (HD)', 'url': p_url, 'size': ''}]
-                        })
+            entries = info.get('entries')
+            raw_list = list(entries) if entries else [info]
 
-                for idx, v in enumerate(media.get('videos', []), 1):
-                    thumb = v.get('thumbnail_url', '')
-                    variants = [item for item in v.get('variants', []) if item.get('url', '').split('?')[0].endswith('.mp4')]
-                    variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-
-                    video_options = []
-                    for var in variants:
-                        v_url = var.get('url', '')
-                        res_match = re.search(r'/(\d+)x(\d+)/', v_url)
-                        res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
-                        video_options.append({'label': res_label, 'url': v_url, 'size': ''})
-
-                    if video_options:
-                        items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'options': video_options})
+            for entry in raw_list:
+                preview = entry.get('thumbnail') or entry.get('url')
+                formats = entry.get('formats', [])
                 
-                return jsonify({'items': items})
-        except Exception:
-            return jsonify({'error': 'ไม่สามารถเชื่อมต่อระบบ X ได้'}), 500
+                video_opts = []
+                seen_res = set()
+                
+                # กรองวิดีโอเรียงจากความชัดสูงไปต่ำ
+                valid_formats = [f for f in formats if f.get('url') and f.get('vcodec') != 'none']
+                valid_formats.sort(key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), reverse=True)
+                
+                for f in valid_formats:
+                    h = f.get('height')
+                    label = f"{h}p" if h else "HD Video"
+                    if label not in seen_res:
+                        seen_res.add(label)
+                        video_opts.append({'label': label, 'url': f.get('url')})
 
-    # 2. Instagram
-    elif 'instagram.com' in raw_url or 'instagr.am' in raw_url:
-        items, err = parse_instagram(raw_url)
-        if err: return jsonify({'error': err}), 400
-        return jsonify({'items': items})
+                # กรณีลิงก์ตรงไม่มี formats
+                if not video_opts and (entry.get('url') or entry.get('direct')):
+                    direct_url = entry.get('url')
+                    if direct_url:
+                        video_opts.append({'label': 'HD Video', 'url': direct_url})
 
-    # 3. Facebook
-    elif 'facebook.com' in raw_url or 'fb.watch' in raw_url or 'fb.gg' in raw_url:
-        items, err = parse_facebook(raw_url)
-        if err: return jsonify({'error': err}), 400
-        return jsonify({'items': items})
+                if video_opts and entry.get('vcodec') != 'none':
+                    items.append({
+                        'type': 'video',
+                        'platform': platform,
+                        'preview': preview,
+                        'options': video_opts
+                    })
+                else:
+                    img_url = entry.get('url') or preview
+                    items.append({
+                        'type': 'photo',
+                        'platform': platform,
+                        'preview': img_url,
+                        'options': [{'label': 'HD Photo', 'url': img_url}]
+                    })
 
-    else:
-        return jsonify({'error': 'รองรับเฉพาะลิงก์ X, Instagram และ Facebook เท่านั้น'}), 400
+    except Exception as e:
+        return jsonify({'error': 'ไม่สามารถดึงข้อมูลสื่อจากลิงก์นี้ได้ (โปรดตรวจสอบว่าโพสต์เป็นสาธารณะหรือไม่)'}), 400
+
+    if not items:
+        return jsonify({'error': 'ไม่พบสื่อในลิงก์นี้'}), 400
+
+    return jsonify({'items': items})
 
 @app.route('/download-file')
 def download_file():
@@ -431,7 +358,7 @@ def download_file():
     req = requests.get(media_url, headers=headers, stream=True)
     
     ext = "jpg" if media_type == 'photo' else "mp4"
-    filename = f"downloaded_media.{ext}"
+    filename = f"media_download.{ext}"
 
     return Response(
         stream_with_context(req.iter_content(chunk_size=1024 * 64)),
@@ -441,4 +368,4 @@ def download_file():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
+    
