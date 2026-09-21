@@ -146,6 +146,12 @@ def format_sec(seconds):
     except:
         return None
 
+def is_profile_image(url):
+    if not url: return True
+    u = url.lower()
+    bad_keywords = ['profile_images', 'profile_banners', 'default_profile', 'avatar', 'favicon', 'logo']
+    return any(k in u for k in bad_keywords)
+
 def detect_platform(url):
     u = url.lower()
     if 'twitter.com' in u or 'x.com' in u: return '𝕏'
@@ -160,6 +166,79 @@ def resolve_url(raw_url):
         return r.url, r.text
     except Exception:
         return raw_url, ""
+
+def extract_x_media(final_url):
+    match = re.search(r'status/(\d+)', final_url)
+    if not match: return None
+    tweet_id = match.group(1)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    # 1. Try FXTwitter API
+    try:
+        r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
+        if r.status_code == 200:
+            tweet = r.json().get('tweet', {})
+            media = tweet.get('media', {})
+            items = []
+            
+            # Videos
+            videos = media.get('videos', [])
+            for v in videos:
+                thumb = v.get('thumbnail_url') or v.get('url')
+                dur = format_sec(v.get('duration_millis', 0) / 1000) if v.get('duration_millis') else None
+                variants = [var for var in v.get('variants', []) if var.get('url', '').split('?')[0].endswith('.mp4')]
+                variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                
+                opts = []
+                seen = set()
+                for var in variants:
+                    v_url = var.get('url', '')
+                    res_m = re.search(r'/(\d+)x(\d+)/', v_url)
+                    label = f"{min(int(res_m.group(1)), int(res_m.group(2)))}p" if res_m else "HD Video"
+                    if label not in seen:
+                        seen.add(label)
+                        opts.append({'label': label, 'url': v_url})
+                
+                if not opts and v.get('url'):
+                    opts.append({'label': 'HD Video', 'url': v.get('url')})
+                    
+                if opts:
+                    items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': opts})
+            if items: return items
+
+            # Photos
+            photos = media.get('photos', [])
+            for p in photos:
+                p_url = p.get('url')
+                if p_url and not is_profile_image(p_url):
+                    items.append({'type': 'photo', 'platform': '𝕏', 'preview': p_url, 'options': [{'label': 'HD Photo', 'url': p_url}]})
+            if items: return items
+    except Exception:
+        pass
+
+    # 2. Try VXTwitter API Fallback
+    try:
+        r = requests.get(f"https://api.vxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            items = []
+            for m in data.get('media_extended', []):
+                m_type = m.get('type')
+                if m_type in ['video', 'gif']:
+                    v_url = m.get('url')
+                    thumb = m.get('thumbnail_url') or v_url
+                    dur = format_sec(m.get('duration')) if m.get('duration') else None
+                    if v_url:
+                        items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': [{'label': 'HD Video', 'url': v_url}]})
+                elif m_type == 'image':
+                    p_url = m.get('url')
+                    if p_url and not is_profile_image(p_url):
+                        items.append({'type': 'photo', 'platform': '𝕏', 'preview': p_url, 'options': [{'label': 'HD Photo', 'url': p_url}]})
+            if items: return items
+    except Exception:
+        pass
+
+    return None
 
 @app.route('/')
 def index():
@@ -179,12 +258,18 @@ def get_media():
     if not raw_url:
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
-    # 1. แปลงลิงก์ย่อ (/share/ หรือ fb.watch) ให้กลายเป็นลิงก์เต็มก่อนเสมอ
     final_url, page_html = resolve_url(raw_url)
     platform_name = detect_platform(final_url)
+
+    # หากเป็นลิงก์ X ให้ดึงผ่าน API เฉพาะทางก่อนทันที
+    if platform_name == '𝕏':
+        x_items = extract_x_media(final_url)
+        if x_items:
+            return jsonify({'items': x_items})
+
     items = []
 
-    # 2. ลองดึงข้อมูลด้วย yt-dlp
+    # ดึงข้อมูลผ่าน yt-dlp สำหรับแพลตฟอร์มอื่น
     if HAS_YTDLP:
         try:
             ydl_opts = {
@@ -224,7 +309,7 @@ def get_media():
                             thumbs = entry.get('thumbnails', [])
                             if thumbs: img_url = thumbs[-1].get('url')
                             else: img_url = preview
-                        if img_url:
+                        if img_url and not is_profile_image(img_url):
                             items.append({'type': 'photo', 'platform': platform_name, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
         except Exception:
             pass
@@ -232,7 +317,7 @@ def get_media():
     if items:
         return jsonify({'items': items})
 
-    # 3. หาก yt-dlp ดึงไม่ได้ (เช่น รูปภาพ FB/IG) ให้สลับมาใช้ระบบ Open Graph Scraping สำรอง
+    # ระบบสำรอง Open Graph Scraping
     if page_html:
         def get_meta(prop):
             m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
@@ -246,36 +331,9 @@ def get_media():
         if og_vid:
             items.append({'type': 'video', 'platform': platform_name, 'preview': og_img or og_vid, 'duration': og_dur, 'options': [{'label': 'HD Video', 'url': og_vid}]})
             return jsonify({'items': items})
-        elif og_img:
+        elif og_img and not is_profile_image(og_img):
             items.append({'type': 'photo', 'platform': platform_name, 'preview': og_img, 'options': [{'label': 'HD Photo', 'url': og_img}]})
             return jsonify({'items': items})
-
-    # 4. ระบบสำรองกรณี Twitter/X
-    if 'twitter.com' in final_url or 'x.com' in final_url:
-        match = re.search(r'status/(\d+)', final_url)
-        if match:
-            tweet_id = match.group(1)
-            try:
-                r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                if r.status_code == 200:
-                    tweet = r.json().get('tweet', {})
-                    media = tweet.get('media', {})
-                    for p in media.get('photos', []):
-                        items.append({'type': 'photo', 'platform': '𝕏', 'preview': p.get('url'), 'options': [{'label': 'HD Photo', 'url': p.get('url')}]})
-                    for v in media.get('videos', []):
-                        thumb = v.get('thumbnail_url', '')
-                        dur_str = format_sec(v.get('duration_ms', 0) / 1000) if v.get('duration_ms') else None
-                        variants = [item for item in v.get('variants', []) if item.get('url', '').split('?')[0].endswith('.mp4')]
-                        variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-                        opts = []
-                        for var in variants:
-                            v_url = var.get('url', '')
-                            res_match = re.search(r'/(\d+)x(\d+)/', v_url)
-                            res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
-                            opts.append({'label': res_label, 'url': v_url})
-                        if opts: items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur_str, 'options': opts})
-                    if items: return jsonify({'items': items})
-            except Exception: pass
 
     return jsonify({'error': 'ไม่สามารถดึงข้อมูลจากลิงก์นี้ได้ โปรดตรวจสอบว่าเป็นโพสต์สาธารณะ'}), 400
 
