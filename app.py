@@ -1,6 +1,5 @@
 import re
 import requests
-import html
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 
 app = Flask(__name__)
@@ -35,12 +34,13 @@ HTML_TEMPLATE = """
         .search-card input { flex: 1; background: transparent; border: none; padding: 14px 16px; color: #fff; font-size: 14px; outline: none; }
         .search-card button { background: linear-gradient(135deg, #1d9bf0 0%, #0072c6 100%); color: #fff; border: none; border-radius: 16px; padding: 0 20px; font-weight: 600; cursor: pointer; }
         .grid-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-        .media-card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; }
+        .media-card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
         .preview-wrapper { width: 100%; height: 170px; background: rgba(0, 0, 0, 0.4); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .preview-wrapper img { width: 100%; height: 100%; object-fit: cover; }
         .badge-glass { position: absolute; background: rgba(15, 15, 20, 0.65); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.15); color: #fff; font-size: 10px; font-weight: 700; padding: 4px 8px; border-radius: 8px; }
         .badge-type { top: 10px; left: 10px; }
         .badge-platform { top: 10px; right: 10px; color: #70baff; text-transform: uppercase; }
+        .badge-duration { bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.8); }
         .card-action { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
         .glass-select { width: 100%; background: rgba(255, 255, 255, 0.08); color: #f5f5f7; border: 1px solid rgba(255, 255, 255, 0.15); padding: 8px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; outline: none; }
         .glass-select option { background: #1c1c1e; color: #fff; }
@@ -98,13 +98,18 @@ HTML_TEMPLATE = """
                         });
                         selectHtml += `</select>`;
                     } else if (item.options && item.options.length === 1) {
-                        selectHtml = `<div style="font-size: 11px; color: #8e8e93; text-align: center;">${item.options[0].label}</div>`;
+                        selectHtml = `<div style="font-size: 11px; color: #8e8e93; text-align: center; padding: 4px;">${item.options[0].label}</div>`;
                     }
+                    
+                    // ป้ายบอกเวลา หากมีส่งมา
+                    let durationHtml = item.duration ? `<span class="badge-glass badge-duration">⏱️ ${item.duration}</span>` : '';
+                    
                     card.innerHTML = `
                         <div class="preview-wrapper">
                             <img src="${item.preview}" alt="preview" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=300'">
                             <span class="badge-glass badge-type">${item.type === 'video' ? '🎥 VIDEO' : '🖼️ PHOTO'}</span>
                             <span class="badge-glass badge-platform">${item.platform}</span>
+                            ${durationHtml}
                         </div>
                         <div class="card-action">
                             ${selectHtml}
@@ -151,7 +156,7 @@ def get_media():
 
     items = []
 
-    # 1. ลองใช้ yt-dlp ก่อน
+    # 1. ระบบดึงข้อมูลจาก yt-dlp 
     if HAS_YTDLP:
         try:
             ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True, 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -162,33 +167,61 @@ def get_media():
                 entries = info.get('entries') or [info]
                 
                 for entry in entries:
+                    if not entry: continue
                     preview = entry.get('thumbnail') or entry.get('url')
-                    formats = [f for f in entry.get('formats', []) if f.get('url') and f.get('vcodec') != 'none']
-                    formats.sort(key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), reverse=True)
+                    
+                    # แปลงระยะเวลาเป็น นาที:วินาที
+                    duration_sec = entry.get('duration')
+                    duration_str = None
+                    if duration_sec:
+                        m, s = divmod(int(duration_sec), 60)
+                        duration_str = f"{m}:{s:02d}"
+
+                    formats = entry.get('formats', [])
                     
                     video_opts = []
                     seen_res = set()
-                    for f in formats:
-                        h = f.get('height')
-                        label = f"{h}p" if h else "HD Video"
-                        if label not in seen_res:
-                            seen_res.add(label)
-                            video_opts.append({'label': label, 'url': f.get('url')})
                     
-                    if not video_opts and entry.get('url'):
-                        video_opts.append({'label': 'HD Video', 'url': entry.get('url')})
-                        
-                    if video_opts and entry.get('vcodec') != 'none':
-                        items.append({'type': 'video', 'platform': platform, 'preview': preview, 'options': video_opts})
+                    # สกัดวิดีโอ
+                    for f in formats:
+                        if f.get('vcodec') != 'none' and f.get('url'):
+                            h = f.get('height')
+                            label = f"{h}p" if h else "HD Video"
+                            if label not in seen_res:
+                                seen_res.add(label)
+                                video_opts.append({'label': label, 'url': f.get('url')})
+                                
+                    video_opts.sort(key=lambda x: int(x['label'].replace('p','')) if 'p' in x['label'] else 0, reverse=True)
+
+                    # ตรวจสอบว่าเป็น Photo หรือ Video
+                    is_photo = False
+                    if entry.get('ext') in ['jpg', 'jpeg', 'png', 'webp']:
+                        is_photo = True
+                    if not video_opts and not entry.get('vcodec'):
+                        is_photo = True
+
+                    if video_opts and not is_photo:
+                        items.append({'type': 'video', 'platform': platform, 'preview': preview, 'duration': duration_str, 'options': video_opts})
                     else:
-                        img_url = entry.get('url') or preview
-                        items.append({'type': 'photo', 'platform': platform, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
+                        # กระบวนการดึงรูปภาพของ IG / FB อย่างละเอียด
+                        img_url = entry.get('url')
+                        
+                        # หากเป็น IG/FB รูปภาพมักจะถูกซ่อนไว้ใน thumbnails
+                        if not img_url or img_url.endswith('.mp4'):
+                            thumbnails = entry.get('thumbnails', [])
+                            if thumbnails:
+                                img_url = thumbnails[-1].get('url') # ดึงรูปความละเอียดสูงสุด
+                            else:
+                                img_url = preview
+                                
+                        if img_url:
+                            items.append({'type': 'photo', 'platform': platform, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
             if items:
                 return jsonify({'items': items})
         except Exception:
             pass
 
-    # 2. ระบบสำรองสำหรับ X (Twitter)
+    # 2. ระบบสำรองสำหรับ X (Twitter) โดยเฉพาะ
     if 'twitter.com' in raw_url or 'x.com' in raw_url:
         match = re.search(r'status/(\d+)', raw_url)
         if match:
@@ -202,6 +235,13 @@ def get_media():
                         items.append({'type': 'photo', 'platform': '𝕏', 'preview': p.get('url'), 'options': [{'label': 'HD Photo', 'url': p.get('url')}]})
                     for v in media.get('videos', []):
                         thumb = v.get('thumbnail_url', '')
+                        
+                        duration_ms = v.get('duration_ms')
+                        duration_str = None
+                        if duration_ms:
+                            m, s = divmod(int(duration_ms) // 1000, 60)
+                            duration_str = f"{m}:{s:02d}"
+                            
                         variants = [item for item in v.get('variants', []) if item.get('url', '').split('?')[0].endswith('.mp4')]
                         variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
                         opts = []
@@ -210,7 +250,7 @@ def get_media():
                             res_match = re.search(r'/(\d+)x(\d+)/', v_url)
                             res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
                             opts.append({'label': res_label, 'url': v_url})
-                        if opts: items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'options': opts})
+                        if opts: items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': duration_str, 'options': opts})
                     if items: return jsonify({'items': items})
             except Exception: pass
 
@@ -232,4 +272,4 @@ def download_file():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-    
+
