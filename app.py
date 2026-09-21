@@ -13,7 +13,6 @@ try:
 except ImportError:
     HAS_YTDLP = False
 
-# User-Agents สำหรับดึงข้อมูล
 BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
 
@@ -48,6 +47,7 @@ HTML_TEMPLATE = """
         .badge-type { top: 10px; left: 10px; }
         .badge-platform { top: 10px; right: 10px; color: #70baff; text-transform: uppercase; }
         .badge-duration { bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.85); color: #34c759; }
+        .badge-index { bottom: 10px; left: 10px; background: rgba(255, 255, 255, 0.2); color: #fff; }
         .card-action { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
         .glass-select { width: 100%; background: rgba(255, 255, 255, 0.08); color: #f5f5f7; border: 1px solid rgba(255, 255, 255, 0.15); padding: 8px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; outline: none; }
         .glass-select option { background: #1c1c1e; color: #fff; }
@@ -71,7 +71,7 @@ HTML_TEMPLATE = """
             <input type="text" id="urlInput" placeholder="วางลิงก์ X หรือ IG ที่นี่...">
             <button onclick="fetchMedia()" id="submitBtn">สแกน</button>
         </div>
-        <div class="loading-box" id="loading">✨ กำลังแกะลิงก์และประมวลผล...</div>
+        <div class="loading-box" id="loading">✨ กำลังค้นหาไฟล์สื่อทั้งหมดในโพสต์...</div>
         <div class="grid-container" id="mediaGrid"></div>
     </div>
     <script>
@@ -108,12 +108,14 @@ HTML_TEMPLATE = """
                     }
                     
                     let durationHtml = item.duration ? `<span class="badge-glass badge-duration">⏱️ ${item.duration}</span>` : '';
+                    let countBadge = fetchedItems.length > 1 ? `<span class="badge-glass badge-index">#${index + 1}</span>` : '';
                     
                     card.innerHTML = `
                         <div class="preview-wrapper">
                             <img src="${item.preview}" alt="preview" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=300'">
                             <span class="badge-glass badge-type">${item.type === 'video' ? '🎥 VIDEO' : '🖼️ PHOTO'}</span>
                             <span class="badge-glass badge-platform">${item.platform}</span>
+                            ${countBadge}
                             ${durationHtml}
                         </div>
                         <div class="card-action">
@@ -156,12 +158,12 @@ def format_sec(seconds):
 def is_profile_image(url):
     if not url: return True
     u = url.lower()
-    bad_keywords = ['profile_images', 'profile_banners', 'default_profile', 'avatar', 'favicon', 'logo']
+    bad_keywords = ['profile_images', 'profile_banners', 'default_profile', 'avatar', 'favicon', 'logo', '150x150', '320x320']
     return any(k in u for k in bad_keywords)
 
 def detect_platform(url):
     u = url.lower()
-    if 'twitter.com' in u or 'x.com' in u: return '𝕏'
+    if 'twitter.com' in u or 'x.com' in u or 't.co' in u: return '𝕏'
     if 'instagram.com' in u or 'instagr.am' in u: return 'Instagram'
     return 'Media'
 
@@ -179,72 +181,93 @@ def extract_x_media(final_url):
     tweet_id = match.group(1)
     headers = {'User-Agent': BROWSER_UA}
     
-    try:
-        r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
-        if r.status_code == 200:
-            tweet = r.json().get('tweet', {})
-            media = tweet.get('media', {})
-            items = []
-            
-            videos = media.get('videos', [])
-            for v in videos:
-                thumb = v.get('thumbnail_url') or v.get('url')
-                dur_raw = v.get('duration') or v.get('duration_millis') or v.get('duration_seconds')
-                dur = format_sec(dur_raw)
+    api_urls = [
+        f"https://api.fxtwitter.com/status/{tweet_id}",
+        f"https://api.vxtwitter.com/Twitter/status/{tweet_id}"
+    ]
+    
+    for api_url in api_urls:
+        try:
+            r = requests.get(api_url, headers=headers, timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                tweet = data.get('tweet') or data
+                media = tweet.get('media', {})
+                items = []
                 
-                variants = [var for var in v.get('variants', []) if var.get('url', '').split('?')[0].endswith('.mp4')]
-                variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                # ดึงวิดีโอทั้งหมด
+                videos = media.get('videos', []) or tweet.get('media_extended', [])
+                for v in videos:
+                    if v.get('type') == 'video' or 'duration' in v or 'variants' in v:
+                        thumb = v.get('thumbnail_url') or v.get('url')
+                        dur_raw = v.get('duration') or v.get('duration_millis') or v.get('duration_seconds')
+                        dur = format_sec(dur_raw)
+                        
+                        variants = [var for var in v.get('variants', []) if var.get('url', '').split('?')[0].endswith('.mp4')]
+                        variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                        
+                        opts = []
+                        seen = set()
+                        for var in variants:
+                            v_url = var.get('url', '')
+                            res_m = re.search(r'/(\d+)x(\d+)/', v_url)
+                            label = f"{min(int(res_m.group(1)), int(res_m.group(2)))}p" if res_m else "HD Video"
+                            if label not in seen:
+                                seen.add(label)
+                                opts.append({'label': label, 'url': v_url})
+                        
+                        if not opts and v.get('url'):
+                            opts.append({'label': 'HD Video', 'url': v.get('url')})
+                            
+                        if opts:
+                            items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': opts})
                 
-                opts = []
-                seen = set()
-                for var in variants:
-                    v_url = var.get('url', '')
-                    res_m = re.search(r'/(\d+)x(\d+)/', v_url)
-                    label = f"{min(int(res_m.group(1)), int(res_m.group(2)))}p" if res_m else "HD Video"
-                    if label not in seen:
-                        seen.add(label)
-                        opts.append({'label': label, 'url': v_url})
+                # ดึงรูปภาพทั้งหมดในโพสต์
+                photos = media.get('photos', [])
+                for p in photos:
+                    p_url = p.get('url')
+                    if p_url and not is_profile_image(p_url):
+                        items.append({'type': 'photo', 'platform': '𝕏', 'preview': p_url, 'options': [{'label': 'HD Photo', 'url': p_url}]})
                 
-                if not opts and v.get('url'):
-                    opts.append({'label': 'HD Video', 'url': v.get('url')})
-                    
-                if opts:
-                    items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': opts})
-            if items: return items
-
-            photos = media.get('photos', [])
-            for p in photos:
-                p_url = p.get('url')
-                if p_url and not is_profile_image(p_url):
-                    items.append({'type': 'photo', 'platform': '𝕏', 'preview': p_url, 'options': [{'label': 'HD Photo', 'url': p_url}]})
-            if items: return items
-    except Exception:
-        pass
+                if items: return items
+        except Exception:
+            continue
 
     return None
 
 def extract_ig_media(final_url):
-    try:
-        match = re.search(r'/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)', final_url)
+    # คลีน URL หา Shortcode
+    match = re.search(r'/(?:p|reel|reels|tv|share/p)/([A-Za-z0-9_-]+)', final_url)
+    if not match:
+        match = re.search(r'([A-Za-z0-9_-]{10,12})', final_url)
         if not match: return None
-        shortcode = match.group(1)
-        
-        headers = {
-            'User-Agent': MOBILE_UA,
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-        
-        embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
-        r = requests.get(embed_url, headers=headers, timeout=8)
-        if r.status_code != 200:
-            r = requests.get(f"https://www.instagram.com/p/{shortcode}/embed/", headers=headers, timeout=8)
-        
-        if r.status_code != 200:
-            return None
+    shortcode = match.group(1)
+    
+    headers = {
+        'User-Agent': MOBILE_UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    
+    items = []
 
-        html_text = r.text
-        items = []
-        
+    # วิธีที่ 1: แกะจาก Instagram Embed Page
+    embed_urls = [
+        f"https://www.instagram.com/p/{shortcode}/embed/captioned/",
+        f"https://www.instagram.com/p/{shortcode}/embed/"
+    ]
+    
+    html_text = ""
+    for e_url in embed_urls:
+        try:
+            r = requests.get(e_url, headers=headers, timeout=7)
+            if r.status_code == 200 and len(r.text) > 500:
+                html_text = r.text
+                break
+        except Exception:
+            continue
+
+    if html_text:
+        # ตรวจสอบโครงสร้างอัลบั้มภาพ/วิดีโอ (Carousel / Sidecar)
         sidecar_match = re.search(r'"edge_sidecar_to_children"\s*:\s*\{\s*"edges"\s*:\s*(\[.*?\])\s*\}', html_text)
         if sidecar_match:
             try:
@@ -252,17 +275,18 @@ def extract_ig_media(final_url):
                 for edge in edges:
                     node = edge.get('node', {})
                     is_vid = node.get('is_video', False)
-                    img_url = (node.get('display_url') or '').replace('\\u0026', '&').replace('&amp;', '&')
-                    vid_url = (node.get('video_url') or '').replace('\\u0026', '&').replace('&amp;', '&')
+                    img_url = html.unescape((node.get('display_url') or '').replace('\\u0026', '&').replace('\\/', '/'))
+                    vid_url = html.unescape((node.get('video_duration') or node.get('video_url') or '').replace('\\u0026', '&').replace('\\/', '/'))
+                    actual_vid = html.unescape((node.get('video_url') or '').replace('\\u0026', '&').replace('\\/', '/'))
                     dur_str = format_sec(node.get('video_duration'))
                     
-                    if is_vid and vid_url:
+                    if is_vid and actual_vid:
                         items.append({
                             'type': 'video',
                             'platform': 'Instagram',
-                            'preview': img_url or vid_url,
+                            'preview': img_url or actual_vid,
                             'duration': dur_str,
-                            'options': [{'label': 'HD Video', 'url': vid_url}]
+                            'options': [{'label': 'HD Video', 'url': actual_vid}]
                         })
                     elif img_url and not is_profile_image(img_url):
                         items.append({
@@ -276,18 +300,19 @@ def extract_ig_media(final_url):
             except Exception:
                 pass
 
+        # ดึงรูปภาพทั้งหมดที่ปรากฏในหน้า Embed
         display_urls = re.findall(r'"display_url"\s*:\s*"([^"]+)"', html_text)
         video_urls = re.findall(r'"video_url"\s*:\s*"([^"]+)"', html_text)
         
         clean_display = []
         for u in display_urls:
-            u_clean = u.replace('\\u0026', '&').replace('\\/', '/').replace('&amp;', '&')
+            u_clean = html.unescape(u.replace('\\u0026', '&').replace('\\/', '/'))
             if u_clean not in clean_display and not is_profile_image(u_clean):
                 clean_display.append(u_clean)
-                
+
         clean_videos = []
         for u in video_urls:
-            u_clean = u.replace('\\u0026', '&').replace('\\/', '/').replace('&amp;', '&')
+            u_clean = html.unescape(u.replace('\\u0026', '&').replace('\\/', '/'))
             if u_clean not in clean_videos:
                 clean_videos.append(u_clean)
 
@@ -312,8 +337,40 @@ def extract_ig_media(final_url):
 
         if items:
             return items
+
+    # วิธีที่ 2: สำรองดึงจาก Public Mirror API กรณีที่ Embed โดนบล็อก IP
+    try:
+        api_res = requests.get(f"https://api.ddinstagram.com/post/{shortcode}", headers=headers, timeout=6)
+        if api_res.status_code == 200:
+            data = api_res.json()
+            media_list = data.get('item', {}).get('media_list', []) or data.get('media', [])
+            if not media_list and data.get('post'):
+                media_list = [data.get('post')]
+            
+            for m in media_list:
+                m_type = m.get('type')
+                if m_type == 'video' or m.get('video_url'):
+                    items.append({
+                        'type': 'video',
+                        'platform': 'Instagram',
+                        'preview': m.get('thumbnail_url') or m.get('url'),
+                        'duration': format_sec(m.get('duration')),
+                        'options': [{'label': 'HD Video', 'url': m.get('video_url') or m.get('url')}]
+                    })
+                else:
+                    img = m.get('url') or m.get('image_url')
+                    if img and not is_profile_image(img):
+                        items.append({
+                            'type': 'photo',
+                            'platform': 'Instagram',
+                            'preview': img,
+                            'options': [{'label': 'HD Photo', 'url': img}]
+                        })
+            if items:
+                return items
     except Exception:
         pass
+
     return None
 
 @app.route('/')
@@ -338,22 +395,26 @@ def get_media():
         final_url, page_html = resolve_url(raw_url)
         platform_name = detect_platform(final_url)
 
-        # 1. ดึงข้อมูล 𝕏 (Twitter)
+        # 1. ลองดึงข้อมูลตามแพลตฟอร์ม
         if platform_name == '𝕏':
             x_items = extract_x_media(final_url)
-            if x_items:
-                return jsonify({'items': x_items})
+            if x_items: return jsonify({'items': x_items})
 
-        # 2. ดึงข้อมูล Instagram
         if platform_name == 'Instagram':
             ig_items = extract_ig_media(final_url)
-            if ig_items:
-                return jsonify({'items': ig_items})
+            if ig_items: return jsonify({'items': ig_items})
+
+        # 2. กรณีสแกนชื่อแพลตฟอร์มไม่ตรง ให้ลองรันทั้งสองตัวสำรอง
+        ig_items = extract_ig_media(final_url)
+        if ig_items: return jsonify({'items': ig_items})
+
+        x_items = extract_x_media(final_url)
+        if x_items: return jsonify({'items': x_items})
 
         items = []
 
-        # 3. Fallback ด้วย yt-dlp เฉพาะ X และ IG
-        if HAS_YTDLP and platform_name in ['𝕏', 'Instagram']:
+        # 3. Fallback สุดท้ายด้วย yt-dlp
+        if HAS_YTDLP:
             try:
                 ydl_opts = {
                     'quiet': True,
@@ -400,7 +461,7 @@ def get_media():
         if items:
             return jsonify({'items': items})
 
-        return jsonify({'error': 'รองรับเฉพาะลิงก์โพสต์สาธารณะจาก 𝕏 (Twitter) และ Instagram เท่านั้น'}), 400
+        return jsonify({'error': 'ไม่พบสื่อในลิงก์นี้ หรือโพสต์อาจเป็นบัญชีส่วนตัว (Private)'}), 400
 
     except Exception as err:
         return jsonify({'error': f'เกิดข้อผิดพลาดจากเซิร์ฟเวอร์: {str(err)}'}), 500
@@ -425,4 +486,4 @@ def download_file():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-       
+          
