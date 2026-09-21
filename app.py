@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import requests
@@ -247,7 +248,6 @@ def extract_ig_media(final_url):
         html_text = r.text
         items = []
         
-        # 1. carousel extraction (อัลบั้มรูป/วิดีโอ)
         sidecar_match = re.search(r'"edge_sidecar_to_children"\s*:\s*\{\s*"edges"\s*:\s*(\[.*?\])\s*\}', html_text)
         if sidecar_match:
             try:
@@ -279,7 +279,6 @@ def extract_ig_media(final_url):
             except Exception:
                 pass
 
-        # 2. Extract fallback display/video urls
         display_urls = re.findall(r'"display_url"\s*:\s*"([^"]+)"', html_text)
         video_urls = re.findall(r'"video_url"\s*:\s*"([^"]+)"', html_text)
         
@@ -342,13 +341,11 @@ def get_media():
         final_url, page_html = resolve_url(raw_url)
         platform_name = detect_platform(final_url)
 
-        # 1. จัดการ X (Twitter)
         if platform_name == '𝕏':
             x_items = extract_x_media(final_url)
             if x_items:
                 return jsonify({'items': x_items})
 
-        # 2. จัดการ Instagram
         if platform_name == 'Instagram':
             ig_items = extract_ig_media(final_url)
             if ig_items:
@@ -356,7 +353,6 @@ def get_media():
 
         items = []
 
-        # 3. ดึงผ่าน yt-dlp
         if HAS_YTDLP:
             try:
                 ydl_opts = {
@@ -398,13 +394,12 @@ def get_media():
                                 else: img_url = preview
                             if img_url and not is_profile_image(img_url):
                                 items.append({'type': 'photo', 'platform': platform_name, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
-           except Exception:
+            except Exception:
                 pass
 
         if items:
             return jsonify({'items': items})
 
-        # 4. Open Graph Scraping Fallback
         if page_html:
             def get_meta(prop):
                 m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
@@ -445,5 +440,6 @@ def download_file():
         return f"Download failed: {str(e)}", 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)                     
-    
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
+                
