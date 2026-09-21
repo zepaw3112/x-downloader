@@ -15,6 +15,7 @@ except ImportError:
 # User-Agents สำหรับหลบหลีกการบล็อก
 CRAWLER_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
 BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -91,7 +92,7 @@ HTML_TEMPLATE = """
                 });
                 const data = await res.json();
                 btn.disabled = false; loading.style.display = 'none';
-                if(data.error) return alert(data.error);
+                if(!res.ok || data.error) return alert(data.error || 'เกิดข้อผิดพลาดในการดึงข้อมูล');
                 fetchedItems = data.items;
                 fetchedItems.forEach((item, index) => {
                     const card = document.createElement('div');
@@ -125,7 +126,7 @@ HTML_TEMPLATE = """
                 });
             } catch (e) {
                 btn.disabled = false; loading.style.display = 'none';
-                alert('เกิดข้อผิดพลาดในการดึงข้อมูล');
+                alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
             }
         }
         function downloadItem(index) {
@@ -150,7 +151,7 @@ def format_sec(seconds):
         m, s = divmod(int(sec), 60)
         h, m = divmod(m, 60)
         return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
-    except:
+    except Exception:
         return None
 
 def is_profile_image(url):
@@ -225,35 +226,37 @@ def extract_x_media(final_url):
     return None
 
 def extract_ig_media(final_url):
-    match = re.search(r'/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)', final_url)
-    if not match: return None
-    shortcode = match.group(1)
-    
-    headers = {
-        'User-Agent': BROWSER_UA,
-        'Accept-Language': 'en-US,en;q=0.9',
-    }
-    
-    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
     try:
+        match = re.search(r'/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)', final_url)
+        if not match: return None
+        shortcode = match.group(1)
+        
+        headers = {
+            'User-Agent': MOBILE_UA,
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+        
+        embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
         r = requests.get(embed_url, headers=headers, timeout=8)
         if r.status_code != 200:
             r = requests.get(f"https://www.instagram.com/p/{shortcode}/embed/", headers=headers, timeout=8)
         
+        if r.status_code != 200:
+            return None
+
         html_text = r.text
         items = []
         
-        # 1. ถอดโครงสร้าง Carousel (อัลบั้มรูป/วิดีโอ) จาก edge_sidecar_to_children
+        # 1. carousel extraction (อัลบั้มรูป/วิดีโอ)
         sidecar_match = re.search(r'"edge_sidecar_to_children"\s*:\s*\{\s*"edges"\s*:\s*(\[.*?\])\s*\}', html_text)
         if sidecar_match:
             try:
-                edges_raw = sidecar_match.group(1)
-                edges = json.loads(edges_raw)
+                edges = json.loads(sidecar_match.group(1))
                 for edge in edges:
                     node = edge.get('node', {})
                     is_vid = node.get('is_video', False)
-                    img_url = node.get('display_url', '').replace('\\u0026', '&').replace('&amp;', '&')
-                    vid_url = node.get('video_url', '').replace('\\u0026', '&').replace('&amp;', '&')
+                    img_url = (node.get('display_url') or '').replace('\\u0026', '&').replace('&amp;', '&')
+                    vid_url = (node.get('video_url') or '').replace('\\u0026', '&').replace('&amp;', '&')
                     dur_str = format_sec(node.get('video_duration'))
                     
                     if is_vid and vid_url:
@@ -276,7 +279,7 @@ def extract_ig_media(final_url):
             except Exception:
                 pass
 
-        # 2. กรณีสแกนหา display_url และ video_url โดยตรงใน Embed HTML
+        # 2. Extract fallback display/video urls
         display_urls = re.findall(r'"display_url"\s*:\s*"([^"]+)"', html_text)
         video_urls = re.findall(r'"video_url"\s*:\s*"([^"]+)"', html_text)
         
@@ -293,11 +296,12 @@ def extract_ig_media(final_url):
                 clean_videos.append(u_clean)
 
         if clean_videos:
-            for v_url in clean_videos:
+            for idx, v_url in enumerate(clean_videos):
+                prev = clean_display[idx] if idx < len(clean_display) else v_url
                 items.append({
                     'type': 'video',
                     'platform': 'Instagram',
-                    'preview': clean_display[0] if clean_display else v_url,
+                    'preview': prev,
                     'duration': None,
                     'options': [{'label': 'HD Video', 'url': v_url}]
                 })
@@ -330,78 +334,68 @@ def sw():
 
 @app.route('/get-media', methods=['POST'])
 def get_media():
-    raw_url = request.json.get('url', '').strip()
-    if not raw_url:
-        return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
+    try:
+        raw_url = request.json.get('url', '').strip() if request.json else ''
+        if not raw_url:
+            return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
-    final_url, page_html = resolve_url(raw_url)
-    platform_name = detect_platform(final_url)
+        final_url, page_html = resolve_url(raw_url)
+        platform_name = detect_platform(final_url)
 
-    # 1. จัดการ X (Twitter)
-    if platform_name == '𝕏':
-        x_items = extract_x_media(final_url)
-        if x_items:
-            return jsonify({'items': x_items})
+        # 1. จัดการ X (Twitter)
+        if platform_name == '𝕏':
+            x_items = extract_x_media(final_url)
+            if x_items:
+                return jsonify({'items': x_items})
 
-    # 2. จัดการ Instagram (แกะ Carousel ได้ทุกรูป/คลิป)
-    if platform_name == 'Instagram':
-        ig_items = extract_ig_media(final_url)
-        if ig_items:
-            return jsonify({'items': ig_items})
+        # 2. จัดการ Instagram
+        if platform_name == 'Instagram':
+            ig_items = extract_ig_media(final_url)
+            if ig_items:
+                return jsonify({'items': ig_items})
 
-    items = []
+        items = []
 
-    # 3. ดึงผ่าน yt-dlp (สำหรับ Facebook และแพลตฟอร์มอื่น)
-    if HAS_YTDLP:
-        try:
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'user_agent': BROWSER_UA
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(final_url, download=False)
-                entries = info.get('entries') or [info]
-                
-                for entry in entries:
-                    if not entry: continue
-                    preview = entry.get('thumbnail') or entry.get('url')
-                    duration_str = format_sec(entry.get('duration'))
-
-                    formats = entry.get('formats', [])
-                    video_opts = []
-                    seen_res = set()
+        # 3. ดึงผ่าน yt-dlp
+        if HAS_YTDLP:
+            try:
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'skip_download': True,
+                    'user_agent': BROWSER_UA
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(final_url, download=False)
+                    entries = info.get('entries') or [info]
                     
-                    for f in formats:
-                        if f.get('vcodec') != 'none' and f.get('url'):
-                            h = f.get('height')
-                            label = f"{h}p" if h else "HD Video"
-                            if label not in seen_res:
-                                seen_res.add(label)
-                                video_opts.append({'label': label, 'url': f.get('url')})
-                                
-                    video_opts.sort(key=lambda x: int(x['label'].replace('p','')) if 'p' in x['label'] else 0, reverse=True)
+                    for entry in entries:
+                        if not entry: continue
+                        preview = entry.get('thumbnail') or entry.get('url')
+                        duration_str = format_sec(entry.get('duration'))
 
-                    if video_opts and entry.get('vcodec') != 'none':
-                        items.append({'type': 'video', 'platform': platform_name, 'preview': preview, 'duration': duration_str, 'options': video_opts})
-                    else:
-                        img_url = entry.get('url')
-                        if not img_url or img_url.endswith('.mp4'):
-                            thumbs = entry.get('thumbnails', [])
-                            if thumbs: img_url = thumbs[-1].get('url')
-                            else: img_url = preview
-                        if img_url and not is_profile_image(img_url):
-                            items.append({'type': 'photo', 'platform': platform_name, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
-        except Exception:
-            pass
+                        formats = entry.get('formats', [])
+                        video_opts = []
+                        seen_res = set()
+                        
+                        for f in formats:
+                            if f.get('vcodec') != 'none' and f.get('url'):
+                                h = f.get('height')
+                                label = f"{h}p" if h else "HD Video"
+                                if label not in seen_res:
+                                    seen_res.add(label)
+                                    video_opts.append({'label': label, 'url': f.get('url')})
+                                    
+                        video_opts.sort(key=lambda x: int(x['label'].replace('p','')) if 'p' in x['label'] else 0, reverse=True)
 
-    if items:
-        return jsonify({'items': items})
-
-    # 4. ระบบสำรอง Open Graph Scraping
-    if page_html:
-        def get_meta(prop):
-            m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
-                re.search(r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']', page_html, re.I)
-            return html.un
+                        if video_opts and entry.get('vcodec') != 'none':
+                            items.append({'type': 'video', 'platform': platform_name, 'preview': preview, 'duration': duration_str, 'options': video_opts})
+                        else:
+                            img_url = entry.get('url')
+                            if not img_url or img_url.endswith('.mp4'):
+                                thumbs = entry.get('thumbnails', [])
+                                if thumbs: img_url = thumbs[-1].get('url')
+                                else: img_url = preview
+                            if img_url and not is_profile_image(img_url):
+                                items.append({'type': 'photo', 'platform': platform_name, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
+    
