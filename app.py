@@ -1,4 +1,5 @@
 import re
+import json
 import requests
 import html
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
@@ -11,7 +12,7 @@ try:
 except ImportError:
     HAS_YTDLP = False
 
-# User-Agents สำหรับหลบหลีกการบล็อกของ FB / IG / X
+# User-Agents สำหรับหลบหลีกการบล็อก
 CRAWLER_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
 BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 
@@ -145,7 +146,7 @@ def format_sec(seconds):
     try:
         sec = float(seconds)
         if sec <= 0: return None
-        if sec > 1000: sec = sec / 1000 # ป้องกันกรณีส่งมาเป็น milliseconds
+        if sec > 1000: sec = sec / 1000
         m, s = divmod(int(sec), 60)
         h, m = divmod(m, 60)
         return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
@@ -166,7 +167,6 @@ def detect_platform(url):
     return 'Media'
 
 def resolve_url(raw_url):
-    # ใช้ Crawler UA เพื่อปลดสิทธิ์ลิงก์แชร์ /share/ และ fb.watch
     headers = {'User-Agent': CRAWLER_UA}
     try:
         r = requests.get(raw_url, headers=headers, allow_redirects=True, timeout=8)
@@ -180,7 +180,6 @@ def extract_x_media(final_url):
     tweet_id = match.group(1)
     headers = {'User-Agent': BROWSER_UA}
     
-    # 1. FXTwitter API
     try:
         r = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
         if r.status_code == 200:
@@ -188,7 +187,6 @@ def extract_x_media(final_url):
             media = tweet.get('media', {})
             items = []
             
-            # Videos
             videos = media.get('videos', [])
             for v in videos:
                 thumb = v.get('thumbnail_url') or v.get('url')
@@ -215,7 +213,6 @@ def extract_x_media(final_url):
                     items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': opts})
             if items: return items
 
-            # Photos
             photos = media.get('photos', [])
             for p in photos:
                 p_url = p.get('url')
@@ -225,28 +222,98 @@ def extract_x_media(final_url):
     except Exception:
         pass
 
-    # 2. VXTwitter API Fallback
+    return None
+
+def extract_ig_media(final_url):
+    match = re.search(r'/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)', final_url)
+    if not match: return None
+    shortcode = match.group(1)
+    
+    headers = {
+        'User-Agent': BROWSER_UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    
+    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
     try:
-        r = requests.get(f"https://api.vxtwitter.com/status/{tweet_id}", headers=headers, timeout=6)
-        if r.status_code == 200:
-            data = r.json()
-            items = []
-            for m in data.get('media_extended', []):
-                m_type = m.get('type')
-                if m_type in ['video', 'gif']:
-                    v_url = m.get('url')
-                    thumb = m.get('thumbnail_url') or v_url
-                    dur = format_sec(m.get('duration'))
-                    if v_url:
-                        items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur, 'options': [{'label': 'HD Video', 'url': v_url}]})
-                elif m_type == 'image':
-                    p_url = m.get('url')
-                    if p_url and not is_profile_image(p_url):
-                        items.append({'type': 'photo', 'platform': '𝕏', 'preview': p_url, 'options': [{'label': 'HD Photo', 'url': p_url}]})
-            if items: return items
+        r = requests.get(embed_url, headers=headers, timeout=8)
+        if r.status_code != 200:
+            r = requests.get(f"https://www.instagram.com/p/{shortcode}/embed/", headers=headers, timeout=8)
+        
+        html_text = r.text
+        items = []
+        
+        # 1. ถอดโครงสร้าง Carousel (อัลบั้มรูป/วิดีโอ) จาก edge_sidecar_to_children
+        sidecar_match = re.search(r'"edge_sidecar_to_children"\s*:\s*\{\s*"edges"\s*:\s*(\[.*?\])\s*\}', html_text)
+        if sidecar_match:
+            try:
+                edges_raw = sidecar_match.group(1)
+                edges = json.loads(edges_raw)
+                for edge in edges:
+                    node = edge.get('node', {})
+                    is_vid = node.get('is_video', False)
+                    img_url = node.get('display_url', '').replace('\\u0026', '&').replace('&amp;', '&')
+                    vid_url = node.get('video_url', '').replace('\\u0026', '&').replace('&amp;', '&')
+                    dur_str = format_sec(node.get('video_duration'))
+                    
+                    if is_vid and vid_url:
+                        items.append({
+                            'type': 'video',
+                            'platform': 'Instagram',
+                            'preview': img_url or vid_url,
+                            'duration': dur_str,
+                            'options': [{'label': 'HD Video', 'url': vid_url}]
+                        })
+                    elif img_url and not is_profile_image(img_url):
+                        items.append({
+                            'type': 'photo',
+                            'platform': 'Instagram',
+                            'preview': img_url,
+                            'options': [{'label': 'HD Photo', 'url': img_url}]
+                        })
+                if items:
+                    return items
+            except Exception:
+                pass
+
+        # 2. กรณีสแกนหา display_url และ video_url โดยตรงใน Embed HTML
+        display_urls = re.findall(r'"display_url"\s*:\s*"([^"]+)"', html_text)
+        video_urls = re.findall(r'"video_url"\s*:\s*"([^"]+)"', html_text)
+        
+        clean_display = []
+        for u in display_urls:
+            u_clean = u.replace('\\u0026', '&').replace('\\/', '/').replace('&amp;', '&')
+            if u_clean not in clean_display and not is_profile_image(u_clean):
+                clean_display.append(u_clean)
+                
+        clean_videos = []
+        for u in video_urls:
+            u_clean = u.replace('\\u0026', '&').replace('\\/', '/').replace('&amp;', '&')
+            if u_clean not in clean_videos:
+                clean_videos.append(u_clean)
+
+        if clean_videos:
+            for v_url in clean_videos:
+                items.append({
+                    'type': 'video',
+                    'platform': 'Instagram',
+                    'preview': clean_display[0] if clean_display else v_url,
+                    'duration': None,
+                    'options': [{'label': 'HD Video', 'url': v_url}]
+                })
+        elif clean_display:
+            for img_url in clean_display:
+                items.append({
+                    'type': 'photo',
+                    'platform': 'Instagram',
+                    'preview': img_url,
+                    'options': [{'label': 'HD Photo', 'url': img_url}]
+                })
+
+        if items:
+            return items
     except Exception:
         pass
-
     return None
 
 @app.route('/')
@@ -276,9 +343,15 @@ def get_media():
         if x_items:
             return jsonify({'items': x_items})
 
+    # 2. จัดการ Instagram (แกะ Carousel ได้ทุกรูป/คลิป)
+    if platform_name == 'Instagram':
+        ig_items = extract_ig_media(final_url)
+        if ig_items:
+            return jsonify({'items': ig_items})
+
     items = []
 
-    # 2. ดึงผ่าน yt-dlp
+    # 3. ดึงผ่าน yt-dlp (สำหรับ Facebook และแพลตฟอร์มอื่น)
     if HAS_YTDLP:
         try:
             ydl_opts = {
@@ -326,40 +399,9 @@ def get_media():
     if items:
         return jsonify({'items': items})
 
-    # 3. ระบบสำรอง Open Graph Scraping (ใช้ Crawler UA ปลดล็อกรูปภาพ FB/IG)
+    # 4. ระบบสำรอง Open Graph Scraping
     if page_html:
         def get_meta(prop):
             m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
                 re.search(r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']', page_html, re.I)
-            return html.unescape(m.group(1)) if m else None
-
-        og_vid = get_meta('og:video') or get_meta('og:video:secure_url')
-        og_img = get_meta('og:image')
-        og_dur = format_sec(get_meta('video:duration') or get_meta('og:video:duration') or get_meta('duration'))
-
-        if og_vid:
-            items.append({'type': 'video', 'platform': platform_name, 'preview': og_img or og_vid, 'duration': og_dur, 'options': [{'label': 'HD Video', 'url': og_vid}]})
-            return jsonify({'items': items})
-        elif og_img and not is_profile_image(og_img):
-            items.append({'type': 'photo', 'platform': platform_name, 'preview': og_img, 'options': [{'label': 'HD Photo', 'url': og_img}]})
-            return jsonify({'items': items})
-
-    return jsonify({'error': 'ไม่สามารถดึงข้อมูลจากลิงก์นี้ได้ โปรดตรวจสอบว่าเป็นโพสต์สาธารณะ'}), 400
-
-@app.route('/download-file')
-def download_file():
-    media_url = request.args.get('url')
-    media_type = request.args.get('type', 'video')
-    if not media_url: return "Missing URL", 400
-    headers = {'User-Agent': BROWSER_UA}
-    req = requests.get(media_url, headers=headers, stream=True)
-    ext = "jpg" if media_type == 'photo' else "mp4"
-    return Response(
-        stream_with_context(req.iter_content(chunk_size=1024 * 64)),
-        content_type=req.headers.get('content-type', 'application/octet-stream'),
-        headers={'Content-Disposition': f'attachment; filename="media_download.{ext}"'}
-    )
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
-                    
+            return html.un
