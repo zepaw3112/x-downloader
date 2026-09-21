@@ -1,5 +1,6 @@
 import re
 import requests
+import html
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 
 app = Flask(__name__)
@@ -37,10 +38,10 @@ HTML_TEMPLATE = """
         .media-card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
         .preview-wrapper { width: 100%; height: 170px; background: rgba(0, 0, 0, 0.4); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .preview-wrapper img { width: 100%; height: 100%; object-fit: cover; }
-        .badge-glass { position: absolute; background: rgba(15, 15, 20, 0.65); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.15); color: #fff; font-size: 10px; font-weight: 700; padding: 4px 8px; border-radius: 8px; }
+        .badge-glass { position: absolute; background: rgba(15, 15, 20, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.15); color: #fff; font-size: 10px; font-weight: 700; padding: 4px 8px; border-radius: 8px; }
         .badge-type { top: 10px; left: 10px; }
         .badge-platform { top: 10px; right: 10px; color: #70baff; text-transform: uppercase; }
-        .badge-duration { bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.8); }
+        .badge-duration { bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.85); color: #34c759; }
         .card-action { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
         .glass-select { width: 100%; background: rgba(255, 255, 255, 0.08); color: #f5f5f7; border: 1px solid rgba(255, 255, 255, 0.15); padding: 8px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; outline: none; }
         .glass-select option { background: #1c1c1e; color: #fff; }
@@ -65,7 +66,7 @@ HTML_TEMPLATE = """
             <input type="text" id="urlInput" placeholder="วางลิงก์ที่นี่...">
             <button onclick="fetchMedia()" id="submitBtn">สแกน</button>
         </div>
-        <div class="loading-box" id="loading">✨ กำลังประมวลผลลิงก์...</div>
+        <div class="loading-box" id="loading">✨ กำลังแกะลิงก์และประมวลผล...</div>
         <div class="grid-container" id="mediaGrid"></div>
     </div>
     <script>
@@ -101,7 +102,6 @@ HTML_TEMPLATE = """
                         selectHtml = `<div style="font-size: 11px; color: #8e8e93; text-align: center; padding: 4px;">${item.options[0].label}</div>`;
                     }
                     
-                    // ป้ายบอกเวลา หากมีส่งมา
                     let durationHtml = item.duration ? `<span class="badge-glass badge-duration">⏱️ ${item.duration}</span>` : '';
                     
                     card.innerHTML = `
@@ -136,6 +136,31 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def format_sec(seconds):
+    if not seconds: return None
+    try:
+        sec = int(float(seconds))
+        m, s = divmod(sec, 60)
+        h, m = divmod(m, 60)
+        return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
+    except:
+        return None
+
+def detect_platform(url):
+    u = url.lower()
+    if 'twitter.com' in u or 'x.com' in u: return '𝕏'
+    if 'instagram.com' in u or 'instagr.am' in u: return 'Instagram'
+    if 'facebook.com' in u or 'fb.watch' in u or 'fb.com' in u: return 'Facebook'
+    return 'Media'
+
+def resolve_url(raw_url):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+    try:
+        r = requests.get(raw_url, headers=headers, allow_redirects=True, timeout=8)
+        return r.url, r.text
+    except Exception:
+        return raw_url, ""
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -154,35 +179,33 @@ def get_media():
     if not raw_url:
         return jsonify({'error': 'กรุณาใส่ลิงก์'}), 400
 
+    # 1. แปลงลิงก์ย่อ (/share/ หรือ fb.watch) ให้กลายเป็นลิงก์เต็มก่อนเสมอ
+    final_url, page_html = resolve_url(raw_url)
+    platform_name = detect_platform(final_url)
     items = []
 
-    # 1. ระบบดึงข้อมูลจาก yt-dlp 
+    # 2. ลองดึงข้อมูลด้วย yt-dlp
     if HAS_YTDLP:
         try:
-            ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True, 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(raw_url, download=False)
-                extractor = info.get('extractor_key', '').lower()
-                platform = '𝕏' if 'twitter' in extractor else ('Instagram' if 'instagram' in extractor else ('Facebook' if 'facebook' in extractor else 'Media'))
+                info = ydl.extract_info(final_url, download=False)
                 entries = info.get('entries') or [info]
                 
                 for entry in entries:
                     if not entry: continue
                     preview = entry.get('thumbnail') or entry.get('url')
-                    
-                    # แปลงระยะเวลาเป็น นาที:วินาที
-                    duration_sec = entry.get('duration')
-                    duration_str = None
-                    if duration_sec:
-                        m, s = divmod(int(duration_sec), 60)
-                        duration_str = f"{m}:{s:02d}"
+                    duration_str = format_sec(entry.get('duration'))
 
                     formats = entry.get('formats', [])
-                    
                     video_opts = []
                     seen_res = set()
                     
-                    # สกัดวิดีโอ
                     for f in formats:
                         if f.get('vcodec') != 'none' and f.get('url'):
                             h = f.get('height')
@@ -193,37 +216,43 @@ def get_media():
                                 
                     video_opts.sort(key=lambda x: int(x['label'].replace('p','')) if 'p' in x['label'] else 0, reverse=True)
 
-                    # ตรวจสอบว่าเป็น Photo หรือ Video
-                    is_photo = False
-                    if entry.get('ext') in ['jpg', 'jpeg', 'png', 'webp']:
-                        is_photo = True
-                    if not video_opts and not entry.get('vcodec'):
-                        is_photo = True
-
-                    if video_opts and not is_photo:
-                        items.append({'type': 'video', 'platform': platform, 'preview': preview, 'duration': duration_str, 'options': video_opts})
+                    if video_opts and entry.get('vcodec') != 'none':
+                        items.append({'type': 'video', 'platform': platform_name, 'preview': preview, 'duration': duration_str, 'options': video_opts})
                     else:
-                        # กระบวนการดึงรูปภาพของ IG / FB อย่างละเอียด
                         img_url = entry.get('url')
-                        
-                        # หากเป็น IG/FB รูปภาพมักจะถูกซ่อนไว้ใน thumbnails
                         if not img_url or img_url.endswith('.mp4'):
-                            thumbnails = entry.get('thumbnails', [])
-                            if thumbnails:
-                                img_url = thumbnails[-1].get('url') # ดึงรูปความละเอียดสูงสุด
-                            else:
-                                img_url = preview
-                                
+                            thumbs = entry.get('thumbnails', [])
+                            if thumbs: img_url = thumbs[-1].get('url')
+                            else: img_url = preview
                         if img_url:
-                            items.append({'type': 'photo', 'platform': platform, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
-            if items:
-                return jsonify({'items': items})
+                            items.append({'type': 'photo', 'platform': platform_name, 'preview': img_url, 'options': [{'label': 'HD Photo', 'url': img_url}]})
         except Exception:
             pass
 
-    # 2. ระบบสำรองสำหรับ X (Twitter) โดยเฉพาะ
-    if 'twitter.com' in raw_url or 'x.com' in raw_url:
-        match = re.search(r'status/(\d+)', raw_url)
+    if items:
+        return jsonify({'items': items})
+
+    # 3. หาก yt-dlp ดึงไม่ได้ (เช่น รูปภาพ FB/IG) ให้สลับมาใช้ระบบ Open Graph Scraping สำรอง
+    if page_html:
+        def get_meta(prop):
+            m = re.search(r'<meta\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']\s+content=["\']([^"\']+)["\']', page_html, re.I) or \
+                re.search(r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']' + re.escape(prop) + r'["\']', page_html, re.I)
+            return html.unescape(m.group(1)) if m else None
+
+        og_vid = get_meta('og:video') or get_meta('og:video:secure_url')
+        og_img = get_meta('og:image')
+        og_dur = format_sec(get_meta('video:duration') or get_meta('og:video:duration'))
+
+        if og_vid:
+            items.append({'type': 'video', 'platform': platform_name, 'preview': og_img or og_vid, 'duration': og_dur, 'options': [{'label': 'HD Video', 'url': og_vid}]})
+            return jsonify({'items': items})
+        elif og_img:
+            items.append({'type': 'photo', 'platform': platform_name, 'preview': og_img, 'options': [{'label': 'HD Photo', 'url': og_img}]})
+            return jsonify({'items': items})
+
+    # 4. ระบบสำรองกรณี Twitter/X
+    if 'twitter.com' in final_url or 'x.com' in final_url:
+        match = re.search(r'status/(\d+)', final_url)
         if match:
             tweet_id = match.group(1)
             try:
@@ -235,13 +264,7 @@ def get_media():
                         items.append({'type': 'photo', 'platform': '𝕏', 'preview': p.get('url'), 'options': [{'label': 'HD Photo', 'url': p.get('url')}]})
                     for v in media.get('videos', []):
                         thumb = v.get('thumbnail_url', '')
-                        
-                        duration_ms = v.get('duration_ms')
-                        duration_str = None
-                        if duration_ms:
-                            m, s = divmod(int(duration_ms) // 1000, 60)
-                            duration_str = f"{m}:{s:02d}"
-                            
+                        dur_str = format_sec(v.get('duration_ms', 0) / 1000) if v.get('duration_ms') else None
                         variants = [item for item in v.get('variants', []) if item.get('url', '').split('?')[0].endswith('.mp4')]
                         variants.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
                         opts = []
@@ -250,7 +273,7 @@ def get_media():
                             res_match = re.search(r'/(\d+)x(\d+)/', v_url)
                             res_label = f"{min(int(res_match.group(1)), int(res_match.group(2)))}p" if res_match else "HD"
                             opts.append({'label': res_label, 'url': v_url})
-                        if opts: items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': duration_str, 'options': opts})
+                        if opts: items.append({'type': 'video', 'platform': '𝕏', 'preview': thumb, 'duration': dur_str, 'options': opts})
                     if items: return jsonify({'items': items})
             except Exception: pass
 
@@ -261,7 +284,7 @@ def download_file():
     media_url = request.args.get('url')
     media_type = request.args.get('type', 'video')
     if not media_url: return "Missing URL", 400
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     req = requests.get(media_url, headers=headers, stream=True)
     ext = "jpg" if media_type == 'photo' else "mp4"
     return Response(
